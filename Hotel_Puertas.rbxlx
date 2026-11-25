@@ -1,0 +1,977 @@
+<?xml version="1.0" encoding="utf-8"?>
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+	<Meta name="ExplicitAutoJoints">true</Meta>
+	<Item class="Workspace" referent="RBX0">
+		<Properties>
+			<string name="Name">Workspace</string>
+		</Properties>
+		
+	</Item>
+	<Item class="Lighting" referent="RBX1">
+		<Properties>
+			<string name="Name">Lighting</string>
+		</Properties>
+		
+	</Item>
+	<Item class="ReplicatedStorage" referent="RBX2">
+		<Properties>
+			<string name="Name">ReplicatedStorage</string>
+		</Properties>
+		
+	</Item>
+	<Item class="ServerScriptService" referent="RBX3">
+		<Properties>
+			<string name="Name">ServerScriptService</string>
+		</Properties>
+		<Item class="Script" referent="RBX4">
+			<Properties>
+				<string name="Name">GeneradorHotel</string>
+				<bool name="Disabled">false</bool>
+				<ProtectedString name="Source"><![CDATA[-- ============================================================
+--  HOTEL DE LAS PUERTAS - habitaciones aleatorias (SIN entidades)
+--  Script de servidor. Genera el hotel al pulsar Play.
+-- ============================================================
+local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local rng = Random.new()
+
+---------------------------------------------------------------- CONFIG
+local TOTAL_ROOMS = 100     -- la ultima habitacion es la salida
+local W, H, WALL = 28, 14, 1 -- ancho, alto y grosor de pared
+local DW, DH = 6, 9          -- ancho y alto de las puertas
+local AHEAD = 2              -- habitaciones generadas por delante
+local KEEP_BEHIND = 3        -- habitaciones que se conservan detras
+local LOCKED_CHANCE = 0.18   -- prob. de puerta con llave (desde la 8)
+local DARK_CHANCE = 0.12     -- prob. de habitacion oscura (desde la 5)
+
+---------------------------------------------------------------- AMBIENTE
+Lighting.Brightness = 0
+Lighting.ClockTime = 0
+Lighting.Ambient = Color3.fromRGB(24, 21, 28)
+Lighting.OutdoorAmbient = Color3.fromRGB(24, 21, 28)
+Lighting.FogColor = Color3.fromRGB(0, 0, 0)
+Lighting.FogStart = 60
+Lighting.FogEnd = 300
+
+local notify = Instance.new("RemoteEvent")
+notify.Name = "Notify"
+notify.Parent = ReplicatedStorage
+
+local hotel = Instance.new("Folder")
+hotel.Name = "Hotel"
+hotel.Parent = workspace
+
+local rooms = {}
+local stats = {}
+local generatedUpTo = -1
+local lastKind = nil
+
+---------------------------------------------------------------- UTILIDADES
+local WOODS = {
+	Color3.fromRGB(92, 62, 40),
+	Color3.fromRGB(110, 75, 48),
+	Color3.fromRGB(70, 48, 34),
+}
+local WALLS = {
+	Color3.fromRGB(122, 98, 74),
+	Color3.fromRGB(96, 76, 66),
+	Color3.fromRGB(84, 92, 84),
+	Color3.fromRGB(104, 84, 96),
+	Color3.fromRGB(130, 112, 86),
+}
+local FLOORS = {
+	{ Color3.fromRGB(88, 30, 34), Enum.Material.Fabric },
+	{ Color3.fromRGB(34, 62, 48), Enum.Material.Fabric },
+	{ Color3.fromRGB(70, 50, 34), Enum.Material.WoodPlanks },
+	{ Color3.fromRGB(52, 44, 60), Enum.Material.Fabric },
+}
+local RUGS = {
+	Color3.fromRGB(120, 36, 40),
+	Color3.fromRGB(40, 70, 100),
+	Color3.fromRGB(110, 90, 40),
+	Color3.fromRGB(60, 90, 66),
+}
+
+local function pick(t)
+	return t[rng:NextInteger(1, #t)]
+end
+
+local function part(parent, name, size, cf, color, material)
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.Size = size
+	p.CFrame = cf
+	p.Color = color
+	p.Material = material or Enum.Material.SmoothPlastic
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Parent = parent
+	return p
+end
+
+local function addLight(p, range, brightness, color)
+	local l = Instance.new("PointLight")
+	l.Range = range
+	l.Brightness = brightness
+	l.Color = color or Color3.fromRGB(255, 214, 150)
+	l.Shadows = false
+	l.Parent = p
+	return l
+end
+
+local function addLabel(p, face, text, color)
+	local g = Instance.new("SurfaceGui")
+	g.Face = face
+	g.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+	g.PixelsPerStud = 40
+	g.Parent = p
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.fromScale(1, 1)
+	t.BackgroundTransparency = 1
+	t.Text = text
+	t.TextScaled = true
+	t.Font = Enum.Font.Garamond
+	t.TextColor3 = color
+	t.Parent = g
+end
+
+---------------------------------------------------------------- DECORACION
+local function addRug(room, x, z, w, d, color)
+	part(room.model, "Alfombra", Vector3.new(w, 0.2, d),
+		CFrame.new(x, 0.1, room.zStart + z), color or pick(RUGS), Enum.Material.Fabric)
+end
+
+local function addPainting(room, side, z)
+	local m = room.model
+	local zz = room.zStart + z
+	local y = 7.5
+	part(m, "Marco", Vector3.new(0.4, 3.4, 4.6), CFrame.new(side * (W / 2 - 0.2), y, zz),
+		Color3.fromRGB(70, 48, 28), Enum.Material.Wood)
+	part(m, "Lienzo", Vector3.new(0.2, 2.8, 4), CFrame.new(side * (W / 2 - 0.35), y, zz),
+		Color3.fromHSV(rng:NextNumber(), 0.45, 0.55), Enum.Material.Fabric)
+	part(m, "Mancha", Vector3.new(0.1, 1.4, 1.8),
+		CFrame.new(side * (W / 2 - 0.5), y + rng:NextNumber(-0.4, 0.4), zz + rng:NextNumber(-0.8, 0.8)),
+		Color3.fromHSV(rng:NextNumber(), 0.5, 0.8), Enum.Material.Fabric)
+end
+
+local function addTable(room, x, z, w, d, h)
+	local m = room.model
+	local c = pick(WOODS)
+	part(m, "Mesa", Vector3.new(w, 0.4, d), CFrame.new(x, h, room.zStart + z), c, Enum.Material.Wood)
+	for _, sx in ipairs({ -1, 1 }) do
+		for _, sz in ipairs({ -1, 1 }) do
+			part(m, "Pata", Vector3.new(0.5, h, 0.5),
+				CFrame.new(x + sx * (w / 2 - 0.5), h / 2, room.zStart + z + sz * (d / 2 - 0.5)),
+				c, Enum.Material.Wood)
+		end
+	end
+end
+
+-- (fx, fz) = direccion hacia la que mira la silla
+local function addChair(room, x, z, fx, fz)
+	local m = room.model
+	local c = pick(WOODS)
+	local zz = room.zStart + z
+	part(m, "Asiento", Vector3.new(2, 0.3, 2), CFrame.new(x, 1.9, zz), c, Enum.Material.Wood)
+	local backSize = Vector3.new(2, 2.2, 0.3)
+	if fx ~= 0 then
+		backSize = Vector3.new(0.3, 2.2, 2)
+	end
+	part(m, "Respaldo", backSize, CFrame.new(x - fx * 0.85, 3.1, zz - fz * 0.85), c, Enum.Material.Wood)
+	for _, sx in ipairs({ -1, 1 }) do
+		for _, sz in ipairs({ -1, 1 }) do
+			part(m, "Pata", Vector3.new(0.3, 1.8, 0.3),
+				CFrame.new(x + sx * 0.8, 0.9, zz + sz * 0.8), c, Enum.Material.Wood)
+		end
+	end
+end
+
+local function addCouch(room, side, z)
+	local m = room.model
+	local zz = room.zStart + z
+	local c = pick({
+		Color3.fromRGB(120, 40, 44),
+		Color3.fromRGB(46, 70, 90),
+		Color3.fromRGB(90, 80, 50),
+		Color3.fromRGB(70, 70, 76),
+	})
+	local bx = side * (W / 2 - 2.5)
+	part(m, "SofaBase", Vector3.new(3.4, 1.6, 7.5), CFrame.new(bx, 0.8, zz), c, Enum.Material.Fabric)
+	part(m, "SofaRespaldo", Vector3.new(0.9, 3.2, 7.5), CFrame.new(side * (W / 2 - 0.55), 1.6, zz), c, Enum.Material.Fabric)
+	for _, dz in ipairs({ -3.3, 3.3 }) do
+		part(m, "SofaBrazo", Vector3.new(3.4, 2.4, 0.9), CFrame.new(bx, 1.2, zz + dz), c, Enum.Material.Fabric)
+	end
+end
+
+local function addCabinet(room, side, z)
+	local m = room.model
+	local zz = room.zStart + z
+	local x = side * (W / 2 - 1.4)
+	part(m, "Mueble", Vector3.new(2.6, 3.2, 4.6), CFrame.new(x, 1.6, zz), pick(WOODS), Enum.Material.Wood)
+	part(m, "Tapa", Vector3.new(2.9, 0.25, 4.9), CFrame.new(x, 3.3, zz), Color3.fromRGB(40, 28, 20), Enum.Material.Wood)
+	for _, dz in ipairs({ -1.1, 1.1 }) do
+		part(m, "Tirador", Vector3.new(0.2, 0.2, 0.8), CFrame.new(side * (W / 2 - 2.75), 2.2, zz + dz),
+			Color3.fromRGB(210, 180, 90), Enum.Material.Metal)
+	end
+	local vase = part(m, "Jarron", Vector3.new(1.2, 0.9, 0.9), CFrame.new(x, 4.05, zz + rng:NextNumber(-1.2, 1.2)) * CFrame.Angles(0, 0, math.pi / 2),
+		Color3.fromHSV(rng:NextNumber(), 0.5, 0.6), Enum.Material.SmoothPlastic)
+	vase.Shape = Enum.PartType.Cylinder
+end
+
+local function addWardrobe(room, side, z)
+	local m = room.model
+	local zz = room.zStart + z
+	local c = pick(WOODS)
+	part(m, "Armario", Vector3.new(3, 9, 7), CFrame.new(side * (W / 2 - 1.5), 4.5, zz), c, Enum.Material.Wood)
+	for _, dz in ipairs({ -1.75, 1.75 }) do
+		part(m, "PuertaArmario", Vector3.new(0.2, 8, 3.2), CFrame.new(side * (W / 2 - 3.1), 4.5, zz + dz),
+			Color3.fromRGB(56, 38, 26), Enum.Material.Wood)
+		part(m, "Pomo", Vector3.new(0.3, 0.3, 0.3), CFrame.new(side * (W / 2 - 3.35), 4.5, zz + dz * 0.3),
+			Color3.fromRGB(210, 180, 90), Enum.Material.Metal)
+	end
+end
+
+local function addBed(room, side, z)
+	local m = room.model
+	local zz = room.zStart + z
+	local x = side * (W / 2 - 3.2)
+	part(m, "CamaMarco", Vector3.new(4.6, 1.4, 8.4), CFrame.new(x, 0.7, zz), pick(WOODS), Enum.Material.Wood)
+	part(m, "Colchon", Vector3.new(4.2, 0.7, 7.8), CFrame.new(x, 1.75, zz),
+		Color3.fromHSV(rng:NextNumber(), 0.25, 0.75), Enum.Material.Fabric)
+	part(m, "Almohada", Vector3.new(3, 0.5, 1.4), CFrame.new(x, 2.35, zz - 3),
+		Color3.fromRGB(225, 220, 205), Enum.Material.Fabric)
+	part(m, "Cabecero", Vector3.new(4.6, 3.6, 0.5), CFrame.new(x, 1.8, zz - 4.45), pick(WOODS), Enum.Material.Wood)
+end
+
+local function addNightstand(room, side, z)
+	local m = room.model
+	local zz = room.zStart + z
+	local x = side * (W / 2 - 1.4)
+	part(m, "Mesilla", Vector3.new(2, 2.2, 2), CFrame.new(x, 1.1, zz), pick(WOODS), Enum.Material.Wood)
+	local lamp = part(m, "LamparaMesa", Vector3.new(0.9, 0.9, 0.9), CFrame.new(x, 2.65, zz),
+		Color3.fromRGB(255, 228, 170), Enum.Material.Neon)
+	if not room.dark then
+		addLight(lamp, 14, 0.7)
+	end
+end
+
+local function addBookshelf(room, side, z)
+	local m = room.model
+	local zz = room.zStart + z
+	part(m, "Estanteria", Vector3.new(2, 10, 8), CFrame.new(side * (W / 2 - 1), 5, zz),
+		Color3.fromRGB(64, 42, 28), Enum.Material.Wood)
+	for level = 0, 3 do
+		local baseY = 1.2 + level * 2.2
+		part(m, "Tabla", Vector3.new(1.2, 0.2, 8), CFrame.new(side * (W / 2 - 2.6), baseY - 0.1, zz),
+			Color3.fromRGB(80, 54, 34), Enum.Material.Wood)
+		local cursor = -3.7
+		while cursor < 3.6 do
+			local bw = rng:NextNumber(0.35, 0.8)
+			local bh = rng:NextNumber(1.2, 1.7)
+			if cursor + bw > 3.8 then
+				break
+			end
+			part(m, "Libro", Vector3.new(0.8, bh, bw),
+				CFrame.new(side * (W / 2 - 2.4), baseY + bh / 2, zz + cursor + bw / 2),
+				Color3.fromHSV(rng:NextNumber(), 0.5, rng:NextNumber(0.25, 0.55)), Enum.Material.Fabric)
+			cursor = cursor + bw + 0.05
+			if rng:NextNumber() < 0.08 then
+				cursor = cursor + rng:NextNumber(0.5, 1.2)
+			end
+		end
+	end
+end
+
+local function addPillar(room, x, z)
+	local m = room.model
+	local zz = room.zStart + z
+	local c = Color3.fromRGB(150, 130, 104)
+	part(m, "Columna", Vector3.new(3, H, 3), CFrame.new(x, H / 2, zz), c, Enum.Material.Marble)
+	part(m, "ColumnaBase", Vector3.new(4, 0.8, 4), CFrame.new(x, 0.4, zz), c, Enum.Material.Marble)
+	part(m, "ColumnaCapitel", Vector3.new(4, 0.8, 4), CFrame.new(x, H - 0.4, zz), c, Enum.Material.Marble)
+end
+
+local function addChandelier(room, x, z)
+	local m = room.model
+	local zz = room.zStart + z
+	part(m, "Cadena", Vector3.new(0.3, 3, 0.3), CFrame.new(x, H - 1.5, zz), Color3.fromRGB(30, 30, 30), Enum.Material.Metal)
+	local ring = part(m, "Aro", Vector3.new(5, 0.4, 5), CFrame.new(x, H - 3.2, zz),
+		Color3.fromRGB(255, 225, 160), Enum.Material.Neon)
+	if not room.dark then
+		addLight(ring, 30, 1.2)
+	end
+end
+
+local function addLamps(room)
+	local count = math.max(2, math.floor(room.length / 14))
+	for k = 1, count do
+		local z = room.length * (k - 0.5) / count
+		local lamp = part(room.model, "Lampara", Vector3.new(3.5, 0.5, 3.5),
+			CFrame.new(0, H - 0.25, room.zStart + z), Color3.fromRGB(255, 228, 170), Enum.Material.Neon)
+		addLight(lamp, 30, 1.1)
+	end
+end
+
+local function addGold(room, forced)
+	local n = forced or rng:NextInteger(0, 3)
+	for _ = 1, n do
+		local x = rng:NextNumber(-W / 2 + 3, W / 2 - 3)
+		local z = rng:NextNumber(4, room.length - 6)
+		local coin = part(room.model, "Oro", Vector3.new(0.3, 1.3, 1.3), CFrame.new(x, 1.8, room.zStart + z),
+			Color3.fromRGB(255, 205, 60), Enum.Material.Metal)
+		coin.Shape = Enum.PartType.Cylinder
+		coin.CanCollide = false
+		local pr = Instance.new("ProximityPrompt")
+		pr.ActionText = "Recoger"
+		pr.ObjectText = "Oro"
+		pr.HoldDuration = 0
+		pr.MaxActivationDistance = 7
+		pr.RequiresLineOfSight = false
+		pr.Parent = coin
+		pr.Triggered:Connect(function(plr)
+			if not coin.Parent then
+				return
+			end
+			local st = stats[plr]
+			if st then
+				st.gold.Value = st.gold.Value + rng:NextInteger(5, 25)
+			end
+			coin:Destroy()
+		end)
+	end
+end
+
+---------------------------------------------------------------- ESTRUCTURA
+local function randomStyle()
+	local f = pick(FLOORS)
+	return { wall = pick(WALLS), floorColor = f[1], floorMat = f[2], trim = Color3.fromRGB(60, 40, 28) }
+end
+
+local function buildShell(room, style)
+	local m = room.model
+	local L = room.length
+	local zc = room.zStart + L / 2
+	part(m, "Suelo", Vector3.new(W, 1, L), CFrame.new(0, -0.5, zc), style.floorColor, style.floorMat)
+	part(m, "Techo", Vector3.new(W, 1, L), CFrame.new(0, H + 0.5, zc), Color3.fromRGB(46, 38, 34))
+	for _, s in ipairs({ -1, 1 }) do
+		part(m, "Pared", Vector3.new(1, H, L), CFrame.new(s * (W / 2 + 0.5), H / 2, zc), style.wall)
+		part(m, "Friso", Vector3.new(0.3, 3.2, L), CFrame.new(s * (W / 2 - 0.15), 1.6, zc), style.trim, Enum.Material.Wood)
+	end
+end
+
+local function buildEndWall(room, style, withDoor)
+	local m = room.model
+	local zw = room.zEnd - WALL / 2
+	if not withDoor then
+		part(m, "ParedFondo", Vector3.new(W, H, WALL), CFrame.new(0, H / 2, zw), style.wall)
+		return
+	end
+	local segW = (W - DW) / 2
+	part(m, "ParedFondoIzq", Vector3.new(segW, H, WALL), CFrame.new(-(DW / 2 + segW / 2), H / 2, zw), style.wall)
+	part(m, "ParedFondoDer", Vector3.new(segW, H, WALL), CFrame.new(DW / 2 + segW / 2, H / 2, zw), style.wall)
+	part(m, "Dintel", Vector3.new(DW, H - DH, WALL), CFrame.new(0, DH + (H - DH) / 2, zw), style.wall)
+	local trim = Color3.fromRGB(58, 38, 26)
+	for _, s in ipairs({ -1, 1 }) do
+		part(m, "Jamba", Vector3.new(0.6, DH, 1.3), CFrame.new(s * (DW / 2 + 0.3), DH / 2, zw - 0.15), trim, Enum.Material.Wood)
+	end
+	part(m, "MarcoSuperior", Vector3.new(DW + 1.2, 0.6, 1.3), CFrame.new(0, DH + 0.3, zw - 0.15), trim, Enum.Material.Wood)
+end
+
+---------------------------------------------------------------- PUERTA Y LLAVE
+local function swingDoor(room)
+	local door = room.door
+	local hinge = CFrame.new(-DW / 2, 0, door.Position.Z)
+	local rot = hinge * CFrame.Angles(0, math.rad(-100), 0) * hinge:Inverse()
+	for _, p in ipairs(room.doorParts) do
+		p.CanCollide = false
+		TweenService:Create(p, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+			{ CFrame = rot * p.CFrame }):Play()
+	end
+end
+
+local function createDoor(room, locked)
+	local m = room.model
+	local zw = room.zEnd - WALL / 2
+	local door = part(m, "Puerta", Vector3.new(DW, DH, 0.8), CFrame.new(0, DH / 2, zw),
+		Color3.fromRGB(112, 72, 42), Enum.Material.Wood)
+	local gold = Color3.fromRGB(210, 180, 90)
+	local knobF = part(m, "PomoPuerta", Vector3.new(0.5, 0.5, 0.5), CFrame.new(DW / 2 - 0.8, 4.4, zw - 0.55), gold, Enum.Material.Metal)
+	local knobB = part(m, "PomoPuerta", Vector3.new(0.5, 0.5, 0.5), CFrame.new(DW / 2 - 0.8, 4.4, zw + 0.55), gold, Enum.Material.Metal)
+	room.door = door
+	room.doorParts = { door, knobF, knobB }
+	room.locked = locked
+	room.opened = false
+
+	local nextNum = room.index + 1
+	local numText = string.format("%03d", nextNum)
+
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.Parent = door
+	local plate = Instance.new("Frame")
+	plate.Size = UDim2.fromScale(0.62, 0.11)
+	plate.Position = UDim2.fromScale(0.19, 0.08)
+	plate.BackgroundColor3 = Color3.fromRGB(30, 22, 16)
+	plate.BorderSizePixel = 0
+	plate.Parent = gui
+	local txt = Instance.new("TextLabel")
+	txt.Size = UDim2.fromScale(1, 1)
+	txt.BackgroundTransparency = 1
+	txt.Text = numText
+	txt.TextScaled = true
+	txt.Font = Enum.Font.GothamBold
+	txt.TextColor3 = Color3.fromRGB(240, 210, 130)
+	txt.Parent = plate
+
+	if locked then
+		local lock = part(m, "Candado", Vector3.new(1.2, 1.4, 0.5), CFrame.new(DW / 2 - 0.9, 3.2, zw - 0.65),
+			Color3.fromRGB(70, 70, 76), Enum.Material.Metal)
+		room.lock = lock
+		table.insert(room.doorParts, lock)
+	end
+
+	if room.dark then
+		local glow = part(m, "LuzSalida", Vector3.new(0.7, 0.7, 0.7), CFrame.new(0, DH + 1.3, zw - 0.5),
+			Color3.fromRGB(255, 150, 60), Enum.Material.Neon)
+		addLight(glow, 14, 0.4, Color3.fromRGB(255, 160, 80))
+	end
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = "Abrir"
+	prompt.ObjectText = "Puerta " .. numText .. (locked and " (con llave)" or "")
+	prompt.HoldDuration = 0.3
+	prompt.MaxActivationDistance = 9
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = door
+	room.prompt = prompt
+
+	prompt.Triggered:Connect(function(plr)
+		if room.opened then
+			return
+		end
+		if room.locked then
+			notify:FireClient(plr, "La puerta esta cerrada con llave. Busca la llave en esta habitacion.")
+			return
+		end
+		room.opened = true
+		prompt:Destroy()
+		swingDoor(room)
+	end)
+end
+
+local function createKey(room)
+	local m = Instance.new("Model")
+	m.Name = "Llave"
+	local x = rng:NextNumber(-W / 2 + 5, W / 2 - 5)
+	local z = rng:NextNumber(6, room.length - 10)
+	local base = CFrame.new(x, 2.4, room.zStart + z)
+	local gold = Color3.fromRGB(255, 214, 80)
+	local shaft = part(m, "Cuerpo", Vector3.new(0.4, 0.4, 2.4), base, gold, Enum.Material.Metal)
+	part(m, "Anillo", Vector3.new(1.2, 1.2, 0.4), base * CFrame.new(0, 0, -1.4), gold, Enum.Material.Metal)
+	part(m, "Diente", Vector3.new(0.4, 0.9, 0.4), base * CFrame.new(0, -0.5, 1.0), gold, Enum.Material.Metal)
+	for _, p in ipairs(m:GetChildren()) do
+		p.CanCollide = false
+	end
+	addLight(shaft, 12, 1.2, Color3.fromRGB(255, 220, 120))
+	local pr = Instance.new("ProximityPrompt")
+	pr.ActionText = "Coger"
+	pr.ObjectText = "Llave"
+	pr.HoldDuration = 0
+	pr.MaxActivationDistance = 10
+	pr.RequiresLineOfSight = false
+	pr.Parent = shaft
+	pr.Triggered:Connect(function(plr)
+		if not room.locked then
+			return
+		end
+		room.locked = false
+		if room.lock then
+			room.lock:Destroy()
+		end
+		if room.prompt then
+			room.prompt.ObjectText = "Puerta " .. string.format("%03d", room.index + 1)
+		end
+		m:Destroy()
+		notify:FireClient(plr, "Llave recogida: la puerta de esta habitacion esta desbloqueada.")
+	end)
+	m.Parent = room.model
+end
+
+---------------------------------------------------------------- TIPOS DE HABITACION
+local function buildLobby(room, L)
+	addRug(room, 0, 14, 12, 16, Color3.fromRGB(110, 40, 40))
+	addCouch(room, -1, 18)
+	addCouch(room, 1, 18)
+	addTable(room, 0, 22, 6, 3, 2)
+	addCabinet(room, -1, 6)
+	addCabinet(room, 1, 6)
+	addPainting(room, -1, 28)
+	addPainting(room, 1, 28)
+	local sign = part(room.model, "Letrero", Vector3.new(16, 4.5, 0.4), CFrame.new(0, 8, 0.2),
+		Color3.fromRGB(28, 20, 14), Enum.Material.Wood)
+	addLabel(sign, Enum.NormalId.Back, "HOTEL - 100 PUERTAS", Color3.fromRGB(240, 210, 130))
+end
+
+local function buildFinal(room, L)
+	addRug(room, 0, L / 2, 8, L - 6, Color3.fromRGB(150, 110, 30))
+	for _, s in ipairs({ -1, 1 }) do
+		for z = 8, L - 8, 12 do
+			addPillar(room, s * 8, z)
+		end
+	end
+	local sign = part(room.model, "Letrero", Vector3.new(18, 5, 0.4), CFrame.new(0, 8, room.zEnd - WALL - 0.2),
+		Color3.fromRGB(28, 20, 14), Enum.Material.Wood)
+	addLabel(sign, Enum.NormalId.Front, "HAS ESCAPADO!", Color3.fromRGB(255, 215, 90))
+end
+
+local function buildPasillo(room, L)
+	addRug(room, 0, L / 2, 6, L - 6)
+	local side = pick({ -1, 1 })
+	for z = 8, L - 10, 10 do
+		addPainting(room, side, z)
+		side = -side
+	end
+	for z = 8, L - 14, 14 do
+		if rng:NextNumber() < 0.7 then
+			addCabinet(room, pick({ -1, 1 }), z + rng:NextInteger(0, 3))
+		end
+	end
+end
+
+local function buildSalon(room, L)
+	addRug(room, 0, L / 2, 14, L - 16)
+	addCouch(room, -1, L * 0.38)
+	addCouch(room, 1, L * 0.62)
+	addTable(room, 0, L / 2, 5, 3, 2)
+	addPainting(room, -1, L * 0.38)
+	addPainting(room, 1, L * 0.62)
+	addCabinet(room, 1, 7)
+	addCabinet(room, -1, L - 9)
+end
+
+local function buildBiblioteca(room, L)
+	addRug(room, 0, L / 2, 10, L - 12)
+	for z = 4, L - 12, 9 do
+		for _, s in ipairs({ -1, 1 }) do
+			if rng:NextNumber() < 0.88 then
+				addBookshelf(room, s, z + 4)
+			end
+		end
+	end
+	local tx = pick({ -1, 1 }) * 6
+	addTable(room, tx, L / 2, 6, 3, 3)
+	addChair(room, tx, L / 2 - 2.8, 0, 1)
+	addChair(room, tx, L / 2 + 2.8, 0, -1)
+end
+
+local function buildDormitorio(room, L)
+	addRug(room, 0, L / 2, 8, L - 12)
+	local side = pick({ -1, 1 })
+	addWardrobe(room, -side, 7)
+	local z = 7
+	while z + 4.2 <= L - 5 do
+		addBed(room, side, z)
+		addNightstand(room, side, math.max(1.6, z - 5.6))
+		side = -side
+		z = z + 12
+	end
+end
+
+local function buildComedor(room, L)
+	addRug(room, 0, L / 2, 10, L - 12)
+	addTable(room, 0, L / 2, 5, 14, 3)
+	for _, dz in ipairs({ -4.5, 0, 4.5 }) do
+		addChair(room, -3.8, L / 2 + dz, 1, 0)
+		addChair(room, 3.8, L / 2 + dz, -1, 0)
+	end
+	addChandelier(room, 0, L / 2)
+	addCabinet(room, -1, 7)
+	addCabinet(room, 1, L - 9)
+	addPainting(room, 1, 10)
+	addPainting(room, -1, L - 10)
+end
+
+local function buildColumnas(room, L)
+	addRug(room, 0, L / 2, 6, L - 6)
+	for z = 8, L - 8, 9 do
+		addPillar(room, -8, z)
+		addPillar(room, 8, z)
+	end
+	addPainting(room, -1, L * 0.3)
+	addPainting(room, 1, L * 0.7)
+	addChandelier(room, 0, L / 2)
+end
+
+local function buildVacia(room, L)
+	addRug(room, 0, L / 2, 8, L - 8)
+	local s = pick({ -1, 1 })
+	addCabinet(room, s, L / 2)
+	addPainting(room, s, L / 2)
+	addPainting(room, -s, L / 2)
+	if rng:NextNumber() < 0.5 then
+		addTable(room, -s * 8, L / 2, 4, 3, 3)
+		addChair(room, -s * 8, L / 2 - 2.6, 0, 1)
+	end
+end
+
+local KINDS = {
+	{ name = "pasillo", weight = 3, minLen = 36, maxLen = 52, build = buildPasillo },
+	{ name = "salon", weight = 3, minLen = 30, maxLen = 44, build = buildSalon },
+	{ name = "biblioteca", weight = 2, minLen = 34, maxLen = 50, build = buildBiblioteca },
+	{ name = "dormitorio", weight = 2, minLen = 30, maxLen = 44, build = buildDormitorio },
+	{ name = "comedor", weight = 2, minLen = 30, maxLen = 44, build = buildComedor },
+	{ name = "columnas", weight = 2, minLen = 36, maxLen = 52, build = buildColumnas },
+	{ name = "vacia", weight = 1, minLen = 24, maxLen = 32, build = buildVacia },
+}
+
+local function pickKind(prevKind)
+	local total = 0
+	for _, k in ipairs(KINDS) do
+		total = total + k.weight
+	end
+	for _ = 1, 4 do
+		local r = rng:NextNumber(0, total)
+		local acc = 0
+		for _, k in ipairs(KINDS) do
+			acc = acc + k.weight
+			if r <= acc then
+				if k ~= prevKind then
+					return k
+				end
+				break
+			end
+		end
+	end
+	return KINDS[1]
+end
+
+---------------------------------------------------------------- GENERADOR
+local function generateRoom(index)
+	local prev = rooms[index - 1]
+	local isLobby = index == 0
+	local isFinal = index == TOTAL_ROOMS
+	local kind = nil
+	local length = 36
+	if isLobby then
+		length = 36
+	elseif isFinal then
+		length = 44
+	else
+		kind = pickKind(lastKind)
+		length = rng:NextInteger(kind.minLen, kind.maxLen)
+	end
+
+	local zStart = prev and prev.zEnd or 0
+	local model = Instance.new("Model")
+	model.Name = "Habitacion_" .. index
+	local room = {
+		index = index,
+		length = length,
+		zStart = zStart,
+		zEnd = zStart + length,
+		model = model,
+		dark = false,
+	}
+
+	local locked = false
+	if not isLobby and not isFinal then
+		locked = index >= 8 and rng:NextNumber() < LOCKED_CHANCE
+		room.dark = index >= 5 and (not locked) and rng:NextNumber() < DARK_CHANCE
+	end
+
+	local style = randomStyle()
+	if isLobby then
+		style = {
+			wall = Color3.fromRGB(110, 86, 62),
+			floorColor = Color3.fromRGB(60, 40, 30),
+			floorMat = Enum.Material.WoodPlanks,
+			trim = Color3.fromRGB(60, 40, 28),
+		}
+	end
+
+	buildShell(room, style)
+	buildEndWall(room, style, not isFinal)
+	if isLobby then
+		part(model, "ParedAtras", Vector3.new(W, H, 1), CFrame.new(0, H / 2, -0.5), style.wall)
+	end
+	if not room.dark then
+		addLamps(room)
+	end
+
+	if isLobby then
+		buildLobby(room, length)
+	elseif isFinal then
+		buildFinal(room, length)
+	else
+		kind.build(room, length)
+	end
+
+	if not isFinal then
+		createDoor(room, locked)
+		if locked then
+			createKey(room)
+		end
+	end
+
+	if isFinal then
+		addGold(room, 8)
+	elseif not isLobby then
+		addGold(room)
+	end
+
+	model.Parent = hotel
+	rooms[index] = room
+	lastKind = kind
+	return room
+end
+
+---------------------------------------------------------------- SPAWN
+local spawnLoc = Instance.new("SpawnLocation")
+spawnLoc.Name = "SpawnLocation"
+spawnLoc.Anchored = true
+spawnLoc.Size = Vector3.new(6, 0.2, 6)
+spawnLoc.CFrame = CFrame.new(0, 0.1, 10)
+spawnLoc.Transparency = 1
+spawnLoc.CanCollide = false
+spawnLoc.Neutral = true
+spawnLoc.Duration = 0
+spawnLoc.Parent = workspace
+
+-- Habitaciones iniciales (0 = vestibulo)
+while generatedUpTo < AHEAD do
+	generatedUpTo = generatedUpTo + 1
+	generateRoom(generatedUpTo)
+end
+
+---------------------------------------------------------------- JUGADORES
+local function giveFlashlight(plr)
+	local backpack = plr:WaitForChild("Backpack", 10)
+	if not backpack then
+		return
+	end
+	local tool = Instance.new("Tool")
+	tool.Name = "Linterna"
+	tool.RequiresHandle = true
+	tool.CanBeDropped = false
+	tool.ToolTip = "Clic para encender / apagar"
+	local handle = Instance.new("Part")
+	handle.Name = "Handle"
+	handle.Size = Vector3.new(0.8, 0.8, 1.8)
+	handle.Color = Color3.fromRGB(40, 40, 44)
+	handle.Material = Enum.Material.Metal
+	handle.Parent = tool
+	local light = Instance.new("SpotLight")
+	light.Name = "Luz"
+	light.Face = Enum.NormalId.Front
+	light.Range = 45
+	light.Angle = 55
+	light.Brightness = 3
+	light.Enabled = false
+	light.Parent = handle
+	tool.Activated:Connect(function()
+		light.Enabled = not light.Enabled
+	end)
+	tool.Unequipped:Connect(function()
+		light.Enabled = false
+	end)
+	tool.Parent = backpack
+end
+
+local function onPlayer(plr)
+	local ls = Instance.new("Folder")
+	ls.Name = "leaderstats"
+	local gold = Instance.new("IntValue")
+	gold.Name = "Oro"
+	gold.Parent = ls
+	local rv = Instance.new("IntValue")
+	rv.Name = "Habitación"
+	rv.Parent = ls
+	ls.Parent = plr
+	stats[plr] = { gold = gold, room = rv }
+	plr:SetAttribute("Room", 0)
+
+	local function onChar(char)
+		local hrp = char:WaitForChild("HumanoidRootPart", 10)
+		if not hrp then
+			return
+		end
+		task.wait(0.3)
+		local cur = plr:GetAttribute("Room") or 0
+		local r = rooms[cur]
+		local z = 10
+		if r and cur > 0 then
+			z = r.zStart + 8
+		end
+		local p = Vector3.new(0, 4, z)
+		char:PivotTo(CFrame.lookAt(p, p + Vector3.new(0, 0, 10)))
+		giveFlashlight(plr)
+	end
+
+	plr.CharacterAdded:Connect(onChar)
+	if plr.Character then
+		task.spawn(onChar, plr.Character)
+	end
+end
+
+Players.PlayerAdded:Connect(onPlayer)
+for _, plr in ipairs(Players:GetPlayers()) do
+	task.spawn(onPlayer, plr)
+end
+Players.PlayerRemoving:Connect(function(plr)
+	stats[plr] = nil
+end)
+
+---------------------------------------------------------------- BUCLE PRINCIPAL
+local function roomAtZ(z)
+	for idx, r in pairs(rooms) do
+		if z >= r.zStart and z < r.zEnd then
+			return idx
+		end
+	end
+	return nil
+end
+
+task.spawn(function()
+	while true do
+		local maxRoom, minRoom, any = 0, math.huge, false
+		for _, plr in ipairs(Players:GetPlayers()) do
+			local char = plr.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if hrp then
+				any = true
+				local idx = roomAtZ(hrp.Position.Z)
+				if idx and idx ~= plr:GetAttribute("Room") then
+					plr:SetAttribute("Room", idx)
+					local st = stats[plr]
+					if st then
+						st.room.Value = idx
+					end
+					local r = rooms[idx]
+					if idx == TOTAL_ROOMS then
+						notify:FireClient(plr, "Has llegado a la salida. Has escapado del hotel!")
+					elseif r and r.dark then
+						notify:FireClient(plr, "Habitacion oscura: pulsa 1 para sacar la linterna y haz clic para encenderla.")
+					end
+				end
+				local cur = plr:GetAttribute("Room") or 0
+				maxRoom = math.max(maxRoom, cur)
+				minRoom = math.min(minRoom, cur)
+				if hrp.Position.Y < -40 then
+					local r = rooms[cur]
+					local z = 10
+					if r then
+						z = r.zStart + 8
+					end
+					char:PivotTo(CFrame.new(0, 4, z))
+				end
+			end
+		end
+
+		if any then
+			local target = math.min(TOTAL_ROOMS, maxRoom + AHEAD)
+			while generatedUpTo < target do
+				generatedUpTo = generatedUpTo + 1
+				generateRoom(generatedUpTo)
+			end
+			for idx, r in pairs(rooms) do
+				if idx < minRoom - KEEP_BEHIND then
+					r.model:Destroy()
+					rooms[idx] = nil
+				end
+			end
+		end
+		task.wait(0.25)
+	end
+end)
+]]></ProtectedString>
+			</Properties>
+		</Item>
+	</Item>
+	<Item class="StarterPlayer" referent="RBX5">
+		<Properties>
+			<string name="Name">StarterPlayer</string>
+		</Properties>
+		<Item class="StarterPlayerScripts" referent="RBX6">
+		<Properties>
+			<string name="Name">StarterPlayerScripts</string>
+		</Properties>
+		<Item class="LocalScript" referent="RBX7">
+			<Properties>
+				<string name="Name">AvisosHotel</string>
+				<bool name="Disabled">false</bool>
+				<ProtectedString name="Source"><![CDATA[-- Avisos en pantalla y cartel de habitacion (LocalScript)
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local notify = ReplicatedStorage:WaitForChild("Notify")
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AvisosHotel"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local function makeLabel(pos, size, textSize, font)
+	local l = Instance.new("TextLabel")
+	l.AnchorPoint = Vector2.new(0.5, 0.5)
+	l.Position = pos
+	l.Size = size
+	l.BackgroundTransparency = 1
+	l.TextColor3 = Color3.fromRGB(240, 220, 170)
+	l.Font = font
+	l.TextSize = textSize
+	l.TextWrapped = true
+	l.TextTransparency = 1
+	l.TextStrokeTransparency = 1
+	l.Parent = gui
+	return l
+end
+
+local function makeShower(label, seconds)
+	local token = 0
+	return function(text)
+		token = token + 1
+		local mine = token
+		label.Text = text
+		label.TextTransparency = 0
+		label.TextStrokeTransparency = 0.5
+		task.delay(seconds, function()
+			if token == mine then
+				TweenService:Create(label, TweenInfo.new(0.8), {
+					TextTransparency = 1,
+					TextStrokeTransparency = 1,
+				}):Play()
+			end
+		end)
+	end
+end
+
+local msgLabel = makeLabel(UDim2.fromScale(0.5, 0.74), UDim2.fromOffset(560, 70), 22, Enum.Font.GothamMedium)
+local roomLabel = makeLabel(UDim2.fromScale(0.5, 0.14), UDim2.fromOffset(500, 60), 40, Enum.Font.Garamond)
+
+local showMsg = makeShower(msgLabel, 4)
+local showRoom = makeShower(roomLabel, 2.2)
+
+notify.OnClientEvent:Connect(showMsg)
+
+player:GetAttributeChangedSignal("Room"):Connect(function()
+	local n = player:GetAttribute("Room")
+	if n and n > 0 then
+		showRoom("HABITACION " .. string.format("%03d", n))
+	end
+end)
+
+task.delay(2, function()
+	showMsg("Abre las puertas con E. Pulsa 1 para sacar la linterna.")
+end)
+]]></ProtectedString>
+			</Properties>
+		</Item>
+	</Item>
+	</Item>
+</roblox>
