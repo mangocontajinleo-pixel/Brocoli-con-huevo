@@ -1,0 +1,1899 @@
+<roblox xmlns:xmime="http://www.w3.org/2005/05/xmlmime" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://www.roblox.com/roblox.xsd" version="4">
+<Meta name="ExplicitAutoJoints">true</Meta>
+<External>null</External>
+<External>nil</External>
+<Item class="Workspace" referent="RBX00000000000000000000000000000001">
+<Properties>
+<string name="Name">Workspace</string>
+</Properties>
+
+</Item>
+<Item class="Lighting" referent="RBX00000000000000000000000000000002">
+<Properties>
+<string name="Name">Lighting</string>
+<token name="Technology">4</token>
+</Properties>
+
+</Item>
+<Item class="Players" referent="RBX00000000000000000000000000000003">
+<Properties>
+<string name="Name">Players</string>
+<bool name="CharacterAutoLoads">false</bool>
+</Properties>
+
+</Item>
+<Item class="ServerScriptService" referent="RBX00000000000000000000000000000005">
+<Properties>
+<string name="Name">ServerScriptService</string>
+</Properties>
+<Item class="Script" referent="RBX00000000000000000000000000000004">
+<Properties>
+<string name="Name">GeneradorHotel</string>
+<ProtectedString name="Source"><![CDATA[-- =====================================================================
+--  HOTEL ESTILO DOORS
+--  100 puertas, habitaciones aleatorias y la puerta 50 es SIEMPRE la
+--  biblioteca grande. Sin entidades (por ahora).
+--  Las habitaciones se generan al jugar, asi que cada partida es distinta.
+--  Hay monedas escondidas encima de sillones, camas y mesas.
+-- =====================================================================
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local CollectionService = game:GetService("CollectionService")
+local Debris = game:GetService("Debris")
+
+---------------------------------------------------------------------
+-- CONFIGURACION
+---------------------------------------------------------------------
+local TOTAL_DOORS = 100      -- la habitacion 100 es la ultima
+local LIBRARY_DOOR = 50      -- esta puerta SIEMPRE lleva a la biblioteca grande
+local ROOMS_AHEAD = 3        -- habitaciones generadas por delante del jugador
+local ROOMS_BEHIND = 2       -- habitaciones que se conservan detras
+local FIRST_PERSON = true    -- camara en primera persona como en Doors
+local LIGHT_SHADOWS = true   -- sombras en las luces (solo con iluminacion Future)
+local COIN_RADIUS = 5.5      -- distancia a la que se recoge una moneda
+
+local DOOR_W = 6
+local DOOR_H = 9
+
+---------------------------------------------------------------------
+-- AMBIENTE
+---------------------------------------------------------------------
+Lighting.Brightness = 0
+Lighting.ClockTime = 0
+Lighting.Ambient = Color3.fromRGB(40, 34, 30)
+Lighting.OutdoorAmbient = Color3.fromRGB(40, 34, 30)
+Lighting.GlobalShadows = true
+Lighting.FogColor = Color3.fromRGB(0, 0, 0)
+Lighting.FogStart = 60
+Lighting.FogEnd = 280
+pcall(function()
+	Lighting.EnvironmentDiffuseScale = 0
+	Lighting.EnvironmentSpecularScale = 0
+end)
+
+-- El personaje solo aparece cuando el vestibulo ya esta construido
+Players.CharacterAutoLoads = false
+
+local hotel = Instance.new("Folder")
+hotel.Name = "Hotel"
+hotel.Parent = workspace
+
+---------------------------------------------------------------------
+-- UTILIDADES
+---------------------------------------------------------------------
+local rng = Random.new()
+local function rand(a, b) return rng:NextNumber(a, b) end
+local function randi(a, b) return rng:NextInteger(a, b) end
+local function chance(p) return rng:NextNumber() < p end
+local function pick(list) return list[rng:NextInteger(1, #list)] end
+local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
+
+-- aclara (k > 1) u oscurece (k < 1) un color
+local function shade(c, k)
+	return Color3.new(math.clamp(c.R * k, 0, 1), math.clamp(c.G * k, 0, 1), math.clamp(c.B * k, 0, 1))
+end
+
+local M = Enum.Material
+local WOOD, PLANKS, FABRIC, PLASTIC, METAL, NEON = M.Wood, M.WoodPlanks, M.Fabric, M.SmoothPlastic, M.Metal, M.Neon
+local SLATE, MARBLE = M.Slate, M.Marble
+
+local WALLPAPERS = { rgb(112, 38, 40), rgb(78, 88, 58), rgb(154, 132, 98), rgb(46, 60, 88), rgb(100, 74, 52), rgb(104, 88, 116), rgb(128, 96, 60) }
+local CARPETS = { rgb(92, 28, 32), rgb(36, 66, 48), rgb(78, 56, 40), rgb(44, 48, 84), rgb(70, 40, 60) }
+local WOODS = { rgb(86, 56, 32), rgb(112, 74, 42), rgb(60, 40, 26), rgb(130, 92, 56) }
+local CEILINGS = { rgb(214, 200, 176), rgb(70, 56, 46), rgb(190, 176, 150) }
+local FABRICS = { rgb(120, 50, 50), rgb(60, 90, 70), rgb(150, 120, 70), rgb(70, 80, 120), rgb(130, 100, 130) }
+local BOOK_COLORS = { rgb(120, 40, 36), rgb(40, 70, 52), rgb(52, 60, 108), rgb(150, 110, 54), rgb(88, 56, 88), rgb(60, 44, 34), rgb(170, 150, 110), rgb(36, 84, 96), rgb(140, 70, 40), rgb(90, 90, 96) }
+local PAINT_COLORS = { rgb(86, 110, 128), rgb(120, 98, 70), rgb(70, 96, 74), rgb(140, 90, 80), rgb(96, 84, 120), rgb(150, 140, 110), rgb(60, 70, 96) }
+local FLOWERS = { rgb(220, 90, 110), rgb(240, 210, 90), rgb(235, 235, 235), rgb(170, 110, 200) }
+local LEAVES = { rgb(48, 100, 52), rgb(60, 118, 60), rgb(38, 84, 46) }
+local BRASS = rgb(176, 138, 62)
+local WARM = rgb(255, 196, 120)
+local WHITE = rgb(228, 224, 214)
+local DARK = rgb(58, 38, 24)
+local MID = rgb(112, 74, 42)
+local COIN_COLOR = rgb(255, 205, 60)
+
+local NOC = { collide = false }
+local NOCQ = { collide = false, shadow = false }
+
+local partCount = 0
+local function breathe()
+	partCount = partCount + 1
+	if partCount % 350 == 0 then
+		task.wait()
+	end
+end
+
+local function applyOpts(p, opts)
+	if opts then
+		if opts.collide == false then p.CanCollide = false end
+		if opts.shadow == false then p.CastShadow = false end
+	end
+end
+
+-- superficies donde pueden aparecer monedas (se reinicia en cada habitacion)
+local surfaces = nil
+local function addSurface(x1, z1, x2, z2, y)
+	if surfaces then
+		table.insert(surfaces, {
+			x1 = math.min(x1, x2), x2 = math.max(x1, x2),
+			z1 = math.min(z1, z2), z2 = math.max(z1, z2),
+			y = y,
+		})
+	end
+end
+
+-- caja entre dos esquinas (x1,y1,z1) y (x2,y2,z2)
+local function block(parent, x1, y1, z1, x2, y2, z2, color, material, opts)
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.Size = Vector3.new(math.max(0.05, math.abs(x2 - x1)), math.max(0.05, math.abs(y2 - y1)), math.max(0.05, math.abs(z2 - z1)))
+	p.CFrame = CFrame.new((x1 + x2) / 2, (y1 + y2) / 2, (z1 + z2) / 2)
+	p.Color = color
+	p.Material = material or PLASTIC
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	applyOpts(p, opts)
+	p.Parent = parent
+	breathe()
+	return p
+end
+
+local function makeCyl(parent, cf, size, color, material, opts)
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.Shape = Enum.PartType.Cylinder
+	p.Size = size
+	p.CFrame = cf
+	p.Color = color
+	p.Material = material or PLASTIC
+	applyOpts(p, opts)
+	p.Parent = parent
+	breathe()
+	return p
+end
+
+-- cilindro vertical (y = centro)
+local function cylinder(parent, x, y, z, height, diameter, color, material, opts)
+	return makeCyl(parent, CFrame.new(x, y, z) * CFrame.Angles(0, 0, math.rad(90)), Vector3.new(height, diameter, diameter), color, material, opts)
+end
+
+-- cilindro con el eje a lo largo de X
+local function cylX(parent, x, y, z, length, diameter, color, material, opts)
+	return makeCyl(parent, CFrame.new(x, y, z), Vector3.new(length, diameter, diameter), color, material, opts)
+end
+
+-- cilindro con el eje a lo largo de Z
+local function cylZ(parent, x, y, z, length, diameter, color, material, opts)
+	return makeCyl(parent, CFrame.new(x, y, z) * CFrame.Angles(0, math.rad(90), 0), Vector3.new(length, diameter, diameter), color, material, opts)
+end
+
+local function ball(parent, x, y, z, diameter, color, material)
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.Shape = Enum.PartType.Ball
+	p.Size = Vector3.new(diameter, diameter, diameter)
+	p.CFrame = CFrame.new(x, y, z)
+	p.Color = color
+	p.Material = material or PLASTIC
+	p.CanCollide = false
+	p.CastShadow = false
+	p.Parent = parent
+	breathe()
+	return p
+end
+
+local function addLight(part, range, brightness, color)
+	local l = Instance.new("PointLight")
+	l.Range = range
+	l.Brightness = brightness
+	l.Color = color
+	l.Shadows = LIGHT_SHADOWS
+	l.Parent = part
+end
+
+local function sign(parent, x1, y1, z1, x2, y2, z2, face, text, textColor, bgColor)
+	local p = block(parent, x1, y1, z1, x2, y2, z2, bgColor, WOOD, NOC)
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = face
+	gui.Parent = p
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.TextScaled = true
+	label.Font = Enum.Font.Antique
+	label.TextColor3 = textColor
+	label.Text = text
+	label.Parent = gui
+	return p
+end
+
+-- centros de z libres para muebles pegados a las paredes
+local function zslots(ctx, size, gap)
+	local list = {}
+	local z = ctx.z0 + 6.5
+	local zEnd = ctx.z1 - 4
+	while z + size <= zEnd do
+		table.insert(list, z + size / 2)
+		z = z + size + gap
+	end
+	return list
+end
+
+local function sideInfo(ctx, side)
+	if side == "L" then
+		return ctx.xl, 1
+	end
+	return ctx.xr, -1
+end
+
+---------------------------------------------------------------------
+-- LUCES
+---------------------------------------------------------------------
+local function pendant(parent, x, z, ceilY, bulbY, range, brightness)
+	block(parent, x - 0.06, bulbY + 0.6, z - 0.06, x + 0.06, ceilY, z + 0.06, BRASS, METAL, NOCQ)
+	cylinder(parent, x, ceilY - 0.15, z, 0.3, 1.0, BRASS, METAL, NOCQ)
+	cylinder(parent, x, bulbY + 0.55, z, 0.8, 2.0, rgb(58, 44, 32), METAL, NOCQ)
+	local bulb = ball(parent, x, bulbY - 0.05, z, 0.9, WARM, NEON)
+	addLight(bulb, range, brightness, WARM)
+end
+
+local function chandelier(parent, x, z, ceilY, y, radius, range, brightness)
+	block(parent, x - 0.1, y, z - 0.1, x + 0.1, ceilY, z + 0.1, BRASS, METAL, NOCQ)
+	cylinder(parent, x, ceilY - 0.2, z, 0.4, 1.4, BRASS, METAL, NOCQ)
+	cylinder(parent, x, y, z, 0.3, radius * 2, BRASS, METAL, NOCQ)
+	cylinder(parent, x, y + 0.9, z, 0.25, radius * 1.2, BRASS, METAL, NOCQ)
+	for i = 0, 7 do
+		local ang = i / 8 * math.pi * 2
+		local bx = x + math.cos(ang) * radius * 0.88
+		local bz = z + math.sin(ang) * radius * 0.88
+		cylinder(parent, bx, y + 0.6, bz, 0.8, 0.3, WHITE, PLASTIC, NOCQ)
+		ball(parent, bx, y + 1.15, bz, 0.4, WARM, NEON)
+		ball(parent, x + math.cos(ang) * radius * 0.98, y - 0.45, z + math.sin(ang) * radius * 0.98, 0.3, rgb(190, 210, 230), NEON)
+	end
+	for i = 0, 3 do
+		local ang = i / 4 * math.pi * 2 + math.pi / 4
+		local bx = x + math.cos(ang) * radius * 0.5
+		local bz = z + math.sin(ang) * radius * 0.5
+		cylinder(parent, bx, y + 1.45, bz, 0.7, 0.25, WHITE, PLASTIC, NOCQ)
+		ball(parent, bx, y + 1.95, bz, 0.35, WARM, NEON)
+	end
+	local core = ball(parent, x, y - 0.6, z, 1.2, WARM, NEON)
+	addLight(core, range, brightness, WARM)
+end
+
+local function tableLamp(parent, x, y, z)
+	cylinder(parent, x, y + 0.12, z, 0.24, 1.0, BRASS, METAL, NOCQ)
+	cylinder(parent, x, y + 0.7, z, 1.0, 0.18, BRASS, METAL, NOCQ)
+	local lampShade = cylinder(parent, x, y + 1.45, z, 0.9, 1.3, WARM, NEON, NOCQ)
+	addLight(lampShade, 14, 1.2, WARM)
+end
+
+local function floorLamp(parent, x, z)
+	cylinder(parent, x, 0.15, z, 0.3, 1.3, rgb(50, 40, 30), METAL, NOCQ)
+	cylinder(parent, x, 2.9, z, 5.2, 0.15, BRASS, METAL, NOCQ)
+	local lampShade = cylinder(parent, x, 5.7, z, 1.4, 1.8, WARM, NEON, NOCQ)
+	addLight(lampShade, 20, 1.2, WARM)
+end
+
+local function sconce(parent, wallX, dir, zc, y)
+	block(parent, wallX, y - 0.6, zc - 0.3, wallX + dir * 0.2, y + 0.6, zc + 0.3, BRASS, METAL, NOCQ)
+	block(parent, wallX + dir * 0.2, y - 0.1, zc - 0.1, wallX + dir * 0.8, y + 0.1, zc + 0.1, BRASS, METAL, NOCQ)
+	ball(parent, wallX + dir * 0.9, y + 0.45, zc, 0.8, WARM, NEON)
+end
+
+---------------------------------------------------------------------
+-- DECORACION PEQUENA
+---------------------------------------------------------------------
+local function vase(parent, x, y, z)
+	local col = pick(PAINT_COLORS)
+	cylinder(parent, x, y + 0.5, z, 1.0, 0.9, col, PLASTIC, NOCQ)
+	cylinder(parent, x, y + 1.15, z, 0.4, 0.45, col, PLASTIC, NOCQ)
+	for _ = 1, 3 do
+		local ox = rand(-0.25, 0.25)
+		local oz = rand(-0.25, 0.25)
+		block(parent, x + ox - 0.03, y + 1.3, z + oz - 0.03, x + ox + 0.03, y + 2.0, z + oz + 0.03, rgb(40, 90, 50), PLASTIC, NOCQ)
+		ball(parent, x + ox, y + 2.1, z + oz, 0.45, pick(FLOWERS), PLASTIC)
+	end
+end
+
+local function bookStack(parent, x, y, z)
+	local yy = y
+	for _ = 1, randi(2, 3) do
+		local w = rand(0.9, 1.4)
+		local d = rand(0.7, 1.0)
+		local t = rand(0.14, 0.26)
+		block(parent, x - w / 2, yy, z - d / 2, x + w / 2, yy + t, z + d / 2, pick(BOOK_COLORS), PLASTIC, NOCQ)
+		yy = yy + t
+	end
+end
+
+local function plate(parent, x, y, z)
+	cylinder(parent, x, y + 0.04, z, 0.08, 1.1, WHITE, PLASTIC, NOCQ)
+end
+
+local function plant(parent, x, z, scale)
+	cylinder(parent, x, 0.7 * scale, z, 1.4 * scale, 1.5 * scale, rgb(150, 78, 48), PLASTIC)
+	cylinder(parent, x, 1.42 * scale, z, 0.1, 1.3 * scale, rgb(40, 28, 20), PLASTIC, NOCQ)
+	for i = 0, 5 do
+		local ang = i / 6 * math.pi * 2
+		local r = 0.55 * scale
+		ball(parent, x + math.cos(ang) * r, (2.4 + (i % 3) * 0.55) * scale, z + math.sin(ang) * r, 1.3 * scale, pick(LEAVES), PLASTIC)
+	end
+	ball(parent, x, 3.6 * scale, z, 1.5 * scale, pick(LEAVES), PLASTIC)
+end
+
+local function rug(parent, x1, z1, x2, z2, main, border)
+	block(parent, x1, 0, z1, x2, 0.06, z2, border, FABRIC, NOCQ)
+	block(parent, x1 + 0.6, 0, z1 + 0.6, x2 - 0.6, 0.08, z2 - 0.6, main, FABRIC, NOCQ)
+	block(parent, x1 + 0.9, 0, z1 + 0.9, x2 - 0.9, 0.09, z2 - 0.9, shade(main, 1.18), FABRIC, NOCQ)
+end
+
+local function column(parent, x, z, H)
+	block(parent, x - 1.3, 0, z - 1.3, x + 1.3, 0.4, z + 1.3, WHITE, PLASTIC)
+	block(parent, x - 1.1, 0.4, z - 1.1, x + 1.1, 0.8, z + 1.1, WHITE, PLASTIC)
+	cylinder(parent, x, H / 2, z, H - 1.8, 1.5, WHITE, PLASTIC)
+	cylinder(parent, x, 1.0, z, 0.3, 1.9, WHITE, PLASTIC, NOC)
+	cylinder(parent, x, H - 1.0, z, 0.3, 1.9, WHITE, PLASTIC, NOC)
+	block(parent, x - 1.1, H - 0.9, z - 1.1, x + 1.1, H - 0.5, z + 1.1, WHITE, PLASTIC)
+	block(parent, x - 1.3, H - 0.5, z - 1.3, x + 1.3, H, z + 1.3, WHITE, PLASTIC)
+end
+
+---------------------------------------------------------------------
+-- PAREDES: CUADROS, ESPEJOS, VENTANAS, RELOJ
+---------------------------------------------------------------------
+local function pane(parent, wallX, dir, d1, d2, z1, y1, z2, y2, color, material)
+	return block(parent, wallX + dir * d1, y1, z1, wallX + dir * d2, y2, z2, color, material or PLASTIC, NOCQ)
+end
+
+local function painting(parent, wallX, dir, zc, yc, w, h)
+	local frame = pick({ rgb(176, 138, 62), rgb(120, 88, 40), rgb(62, 42, 28), rgb(150, 110, 48) })
+	local z1 = zc - w / 2
+	local z2 = zc + w / 2
+	local y1 = yc - h / 2
+	local y2 = yc + h / 2
+	block(parent, wallX, y1, z1, wallX + dir * 0.32, y2, z2, frame, WOOD, NOC)
+	local iz1 = z1 + 0.4
+	local iz2 = z2 - 0.4
+	local iy1 = y1 + 0.4
+	local iy2 = y2 - 0.4
+	pane(parent, wallX, dir, 0.32, 0.4, iz1 - 0.12, iy1 - 0.12, iz2 + 0.12, iy2 + 0.12, shade(frame, 0.55), WOOD)
+	local ih = iy2 - iy1
+	local iw = iz2 - iz1
+	local style = randi(1, 3)
+	if style == 1 then
+		pane(parent, wallX, dir, 0.4, 0.44, iz1, iy1, iz2, iy2, pick({ rgb(110, 140, 175), rgb(190, 150, 110), rgb(90, 100, 140) }))
+		pane(parent, wallX, dir, 0.44, 0.47, iz1, iy1, iz2, iy1 + ih * 0.42, rgb(70, 100, 62))
+		pane(parent, wallX, dir, 0.47, 0.5, iz1 + iw * 0.35, iy1, iz2, iy1 + ih * 0.3, rgb(52, 82, 52))
+		ball(parent, wallX + dir * 0.5, iy2 - ih * 0.2, iz2 - iw * 0.22, ih * 0.16, rgb(240, 220, 150), PLASTIC)
+	elseif style == 2 then
+		pane(parent, wallX, dir, 0.4, 0.44, iz1, iy1, iz2, iy2, rgb(36, 28, 24))
+		pane(parent, wallX, dir, 0.44, 0.5, zc - iw * 0.3, iy1, zc + iw * 0.3, iy1 + ih * 0.38, pick(FABRICS))
+		ball(parent, wallX + dir * 0.52, iy1 + ih * 0.62, zc, ih * 0.3, rgb(224, 190, 160), PLASTIC)
+	else
+		pane(parent, wallX, dir, 0.4, 0.44, iz1, iy1, iz2, iy2, pick(PAINT_COLORS))
+		pane(parent, wallX, dir, 0.44, 0.48, iz1 + iw * 0.1, iy1 + ih * 0.15, iz1 + iw * 0.55, iy1 + ih * 0.7, pick(PAINT_COLORS))
+		pane(parent, wallX, dir, 0.48, 0.52, iz1 + iw * 0.45, iy1 + ih * 0.4, iz2 - iw * 0.1, iy2 - ih * 0.1, pick(PAINT_COLORS))
+	end
+end
+
+local function mirror(parent, wallX, dir, zc, yc, w, h)
+	block(parent, wallX, yc - h / 2, zc - w / 2, wallX + dir * 0.3, yc + h / 2, zc + w / 2, BRASS, METAL, NOC)
+	local glass = block(parent, wallX + dir * 0.3, yc - h / 2 + 0.35, zc - w / 2 + 0.35, wallX + dir * 0.38, yc + h / 2 - 0.35, zc + w / 2 - 0.35, rgb(170, 190, 205), METAL, NOCQ)
+	glass.Reflectance = 0.35
+end
+
+local function window(parent, wallX, dir, zc, yc, w, h)
+	local frame = rgb(70, 48, 30)
+	local curtain = pick(FABRICS)
+	local y1 = yc - h / 2
+	local y2 = yc + h / 2
+	local z1 = zc - w / 2
+	local z2 = zc + w / 2
+	block(parent, wallX, y1, z1, wallX + dir * 0.12, y2, z2, rgb(18, 26, 50), PLASTIC, NOCQ)
+	ball(parent, wallX + dir * 0.2, y2 - h * 0.22, z2 - w * 0.25, 0.7, rgb(235, 232, 205), NEON)
+	block(parent, wallX, y1 - 0.35, z1 - 0.3, wallX + dir * 0.55, y1, z2 + 0.3, frame, WOOD, NOC)
+	block(parent, wallX, y2, z1 - 0.3, wallX + dir * 0.4, y2 + 0.3, z2 + 0.3, frame, WOOD, NOC)
+	block(parent, wallX, y1, z1 - 0.3, wallX + dir * 0.4, y2, z1, frame, WOOD, NOC)
+	block(parent, wallX, y1, z2, wallX + dir * 0.4, y2, z2 + 0.3, frame, WOOD, NOC)
+	block(parent, wallX, y1, zc - 0.07, wallX + dir * 0.3, y2, zc + 0.07, frame, WOOD, NOC)
+	block(parent, wallX, yc - 0.07, z1, wallX + dir * 0.3, yc + 0.07, z2, frame, WOOD, NOC)
+	block(parent, wallX, y1 - 1.0, z1 - 1.3, wallX + dir * 0.7, y2 + 0.6, z1 - 0.35, curtain, FABRIC, NOC)
+	block(parent, wallX, y1 - 1.0, z2 + 0.35, wallX + dir * 0.7, y2 + 0.6, z2 + 1.3, curtain, FABRIC, NOC)
+	cylZ(parent, wallX + dir * 0.8, y2 + 0.8, zc, w + 3.2, 0.2, BRASS, METAL, NOCQ)
+	ball(parent, wallX + dir * 0.8, y2 + 0.8, z1 - 1.7, 0.4, BRASS, METAL)
+	ball(parent, wallX + dir * 0.8, y2 + 0.8, z2 + 1.7, 0.4, BRASS, METAL)
+end
+
+local function grandClock(parent, wallX, dir, zc, wood)
+	block(parent, wallX, 0, zc - 1.0, wallX + dir * 1.9, 1.3, zc + 1.0, wood, WOOD)
+	block(parent, wallX, 1.3, zc - 0.8, wallX + dir * 1.6, 6.3, zc + 0.8, shade(wood, 0.85), WOOD)
+	block(parent, wallX + dir * 1.6, 1.8, zc - 0.5, wallX + dir * 1.66, 5.8, zc + 0.5, rgb(20, 26, 36), PLASTIC, NOCQ)
+	block(parent, wallX + dir * 1.66, 1.9, zc - 0.04, wallX + dir * 1.7, 5.0, zc + 0.04, BRASS, METAL, NOCQ)
+	cylX(parent, wallX + dir * 1.72, 2.4, zc, 0.1, 0.9, BRASS, METAL, NOCQ)
+	block(parent, wallX, 6.3, zc - 1.0, wallX + dir * 1.8, 8.2, zc + 1.0, wood, WOOD)
+	cylX(parent, wallX + dir * 1.84, 7.2, zc, 0.1, 1.5, WHITE, PLASTIC, NOCQ)
+	block(parent, wallX + dir * 1.88, 7.2, zc - 0.04, wallX + dir * 1.92, 7.95, zc + 0.04, DARK, PLASTIC, NOCQ)
+	block(parent, wallX + dir * 1.88, 7.16, zc, wallX + dir * 1.92, 7.24, zc + 0.5, DARK, PLASTIC, NOCQ)
+	block(parent, wallX, 8.2, zc - 1.15, wallX + dir * 2.0, 8.6, zc + 1.15, shade(wood, 1.2), WOOD, NOC)
+end
+
+---------------------------------------------------------------------
+-- MUEBLES
+---------------------------------------------------------------------
+local function tableBox(parent, cx, cz, w, d, h, color)
+	block(parent, cx - w / 2, h - 0.35, cz - d / 2, cx + w / 2, h, cz + d / 2, shade(color, 1.15), WOOD)
+	block(parent, cx - w / 2 + 0.3, h - 0.8, cz - d / 2 + 0.3, cx + w / 2 - 0.3, h - 0.35, cz + d / 2 - 0.3, color, WOOD, NOCQ)
+	local lw = 0.45
+	for _, sx in ipairs({ -1, 1 }) do
+		for _, sz in ipairs({ -1, 1 }) do
+			local lx = cx + sx * (w / 2 - 0.4)
+			local lz = cz + sz * (d / 2 - 0.4)
+			block(parent, lx - lw / 2, 0.25, lz - lw / 2, lx + lw / 2, h - 0.35, lz + lw / 2, color, WOOD)
+			block(parent, lx - 0.35, 0, lz - 0.35, lx + 0.35, 0.25, lz + 0.35, DARK, WOOD, NOC)
+		end
+	end
+	if w >= 1.4 and d >= 1.4 then
+		addSurface(cx - w / 2, cz - d / 2, cx + w / 2, cz + d / 2, h)
+	end
+end
+
+-- back: lado donde esta el respaldo ("+x", "-x", "+z", "-z")
+local function chair(parent, cx, cz, back, color, cushion)
+	local s = 1.7
+	block(parent, cx - s / 2, 1.5, cz - s / 2, cx + s / 2, 1.8, cz + s / 2, color, WOOD)
+	block(parent, cx - s / 2 + 0.1, 1.8, cz - s / 2 + 0.1, cx + s / 2 - 0.1, 2.05, cz + s / 2 - 0.1, cushion, FABRIC, NOC)
+	local lw = 0.25
+	for _, sx in ipairs({ -1, 1 }) do
+		for _, sz in ipairs({ -1, 1 }) do
+			local lx = cx + sx * (s / 2 - lw / 2)
+			local lz = cz + sz * (s / 2 - lw / 2)
+			block(parent, lx - lw / 2, 0, lz - lw / 2, lx + lw / 2, 1.5, lz + lw / 2, color, WOOD)
+		end
+	end
+	local t = 0.22
+	local function bk(u1, u2, y1, y2)
+		if back == "+z" then
+			block(parent, cx + u1, y1, cz + s / 2 - t, cx + u2, y2, cz + s / 2, color, WOOD)
+		elseif back == "-z" then
+			block(parent, cx + u1, y1, cz - s / 2, cx + u2, y2, cz - s / 2 + t, color, WOOD)
+		elseif back == "+x" then
+			block(parent, cx + s / 2 - t, y1, cz + u1, cx + s / 2, y2, cz + u2, color, WOOD)
+		else
+			block(parent, cx - s / 2, y1, cz + u1, cx - s / 2 + t, y2, cz + u2, color, WOOD)
+		end
+	end
+	bk(-s / 2, -s / 2 + 0.25, 1.8, 3.9)
+	bk(s / 2 - 0.25, s / 2, 1.8, 3.9)
+	bk(-s / 2, s / 2, 3.6, 3.9)
+	bk(-0.45, -0.3, 2.2, 3.6)
+	bk(0.3, 0.45, 2.2, 3.6)
+end
+
+local function couch(parent, wallX, dir, zc, len, color)
+	local depth = 3.4
+	local dark = shade(color, 0.7)
+	local light = shade(color, 1.18)
+	for _, sz in ipairs({ -1, 1 }) do
+		for _, sx in ipairs({ 0.4, depth - 0.4 }) do
+			local lz = zc + sz * (len / 2 - 0.5)
+			block(parent, wallX + dir * (sx - 0.2), 0, lz - 0.2, wallX + dir * (sx + 0.2), 0.4, lz + 0.2, DARK, WOOD, NOC)
+		end
+	end
+	block(parent, wallX, 0.4, zc - len / 2, wallX + dir * depth, 1.5, zc + len / 2, dark, FABRIC)
+	block(parent, wallX, 1.5, zc - len / 2, wallX + dir * 1.0, 3.9, zc + len / 2, color, FABRIC)
+	for _, sz in ipairs({ -1, 1 }) do
+		local za = zc + sz * (len / 2 - 0.45)
+		block(parent, wallX, 1.5, za - 0.45, wallX + dir * depth, 2.7, za + 0.45, color, FABRIC)
+		cylX(parent, wallX + dir * (depth / 2), 2.7, za, depth, 0.9, color, FABRIC, NOC)
+	end
+	local inner = len - 1.8
+	local n = math.max(1, math.floor(inner / 2.6))
+	local cw = inner / n
+	for i = 0, n - 1 do
+		local za = zc - inner / 2 + i * cw
+		block(parent, wallX + dir * 1.0, 1.5, za + 0.04, wallX + dir * depth, 2.15, za + cw - 0.04, light, FABRIC, NOC)
+		block(parent, wallX + dir * 1.0, 2.15, za + 0.1, wallX + dir * 1.8, 3.7, za + cw - 0.1, light, FABRIC, NOC)
+	end
+	block(parent, wallX + dir * 1.8, 2.15, zc - inner / 2 + 0.1, wallX + dir * 2.5, 3.1, zc - inner / 2 + 1.0, pick(FABRICS), FABRIC, NOC)
+	addSurface(wallX + dir * 1.0, zc - inner / 2, wallX + dir * depth, zc + inner / 2, 2.15)
+end
+
+local function bed(parent, wallX, dir, zc, frameColor, sheetColor)
+	local xa = wallX + dir * 0.4
+	local xb = wallX + dir * 5.4
+	local xm = (xa + xb) / 2
+	block(parent, xa, 0.4, zc - 4, xb, 1.3, zc + 4, frameColor, WOOD)
+	block(parent, xa, 1.3, zc - 3.7, xb, 2.2, zc + 3.7, rgb(220, 214, 202), FABRIC)
+	block(parent, xa, 0.4, zc - 4, xb, 4.6, zc - 3.7, frameColor, WOOD)
+	block(parent, xa, 0.4, zc + 3.7, xb, 2.4, zc + 4, frameColor, WOOD)
+	block(parent, xa, 2.2, zc - 1.1, xb, 2.55, zc + 3.7, sheetColor, FABRIC)
+	block(parent, xa, 2.2, zc - 1.1, xb, 2.62, zc - 0.55, shade(sheetColor, 1.25), FABRIC)
+	block(parent, xa + dir * 0.3, 2.2, zc - 3.5, xm - dir * 0.1, 2.85, zc - 1.9, WHITE, FABRIC, NOC)
+	block(parent, xm + dir * 0.1, 2.2, zc - 3.5, xb - dir * 0.3, 2.85, zc - 1.9, WHITE, FABRIC, NOC)
+	for _, px in ipairs({ xa + dir * 0.25, xb - dir * 0.25 }) do
+		cylinder(parent, px, 2.6, zc - 3.85, 5.2, 0.45, frameColor, WOOD)
+		ball(parent, px, 5.35, zc - 3.85, 0.6, BRASS, METAL)
+		cylinder(parent, px, 1.5, zc + 3.85, 3.0, 0.4, frameColor, WOOD)
+		ball(parent, px, 3.1, zc + 3.85, 0.5, BRASS, METAL)
+	end
+	addSurface(xa, zc - 0.7, xb, zc + 3.5, 2.62)
+end
+
+local function wardrobe(parent, wallX, dir, zc, color)
+	local front = wallX + dir * 2.4
+	local panel = shade(color, 0.8)
+	block(parent, wallX, 0.3, zc - 2.25, front, 8.2, zc + 2.25, color, WOOD)
+	block(parent, wallX, 0, zc - 2.15, wallX + dir * 2.2, 0.3, zc + 2.15, DARK, WOOD, NOC)
+	block(parent, wallX, 8.2, zc - 2.4, wallX + dir * 2.7, 8.6, zc + 2.4, shade(color, 1.2), WOOD, NOC)
+	for _, sz in ipairs({ -1, 1 }) do
+		local za = zc + sz * 1.1
+		block(parent, front, 0.9, za - 0.9, front + dir * 0.06, 4.2, za + 0.9, panel, WOOD, NOCQ)
+		block(parent, front, 4.6, za - 0.9, front + dir * 0.06, 7.7, za + 0.9, panel, WOOD, NOCQ)
+		ball(parent, front + dir * 0.16, 4.4, zc + sz * 0.3, 0.3, BRASS, METAL)
+	end
+end
+
+-- mueble bajo pegado a la pared (comoda, aparador, mesita)
+local function cabinet(parent, wallX, dir, zc, len, h, wood, sections)
+	local front = wallX + dir * 1.9
+	block(parent, wallX, 0, zc - len / 2 + 0.15, wallX + dir * 1.7, 0.3, zc + len / 2 - 0.15, DARK, WOOD, NOC)
+	block(parent, wallX, 0.3, zc - len / 2, front, h, zc + len / 2, wood, WOOD)
+	block(parent, wallX, h, zc - len / 2 - 0.1, wallX + dir * 2.1, h + 0.2, zc + len / 2 + 0.1, shade(wood, 1.2), WOOD)
+	local panelColor = shade(wood, 0.82)
+	for i = 0, sections - 1 do
+		local za = zc - len / 2 + i * len / sections
+		local zb = za + len / sections
+		block(parent, front, 0.55, za + 0.2, front + dir * 0.06, h - 0.25, zb - 0.2, panelColor, WOOD, NOCQ)
+		ball(parent, front + dir * 0.16, h * 0.55, (za + zb) / 2, 0.28, BRASS, METAL)
+	end
+	addSurface(wallX, zc - len / 2, wallX + dir * 2.1, zc + len / 2, h + 0.2)
+end
+
+local function sideTable(parent, wallX, dir, zc, len, wood, deco)
+	local h = 2.8
+	cabinet(parent, wallX, dir, zc, len, h, wood, math.max(1, math.floor(len / 2)))
+	local x = wallX + dir * 1.0
+	local y = h + 0.2
+	if deco == "lamp" then
+		tableLamp(parent, x, y, zc)
+	elseif deco == "books" then
+		bookStack(parent, x, y, zc)
+	else
+		vase(parent, x, y, zc)
+	end
+end
+
+local function crate(parent, x, y0, z, s, color)
+	block(parent, x - s / 2, y0, z - s / 2, x + s / 2, y0 + s, z + s / 2, color, WOOD)
+	local t = 0.25
+	for _, sx in ipairs({ -1, 1 }) do
+		for _, sz in ipairs({ -1, 1 }) do
+			local px = x + sx * (s / 2)
+			local pz = z + sz * (s / 2)
+			block(parent, px - t / 2, y0, pz - t / 2, px + t / 2, y0 + s, pz + t / 2, rgb(54, 36, 22), WOOD, NOC)
+		end
+	end
+end
+
+local function barrel(parent, x, z)
+	cylinder(parent, x, 1.5, z, 3, 2.2, rgb(104, 70, 40), WOOD)
+	cylinder(parent, x, 0.8, z, 0.2, 2.3, rgb(60, 60, 64), METAL, NOCQ)
+	cylinder(parent, x, 2.2, z, 0.2, 2.3, rgb(60, 60, 64), METAL, NOCQ)
+end
+
+local function sack(parent, x, z)
+	local col = rgb(186, 164, 124)
+	cylinder(parent, x, 1.1, z, 2.2, 1.9, col, FABRIC)
+	cylinder(parent, x, 2.35, z, 0.5, 1.0, shade(col, 0.85), FABRIC, NOCQ)
+	cylinder(parent, x, 2.1, z, 0.12, 1.2, rgb(110, 80, 50), FABRIC, NOCQ)
+end
+
+-- estanteria con libros. alongX: eje largo en X. sides: lados con libros (+1/-1)
+local function shelf(parent, cx, cz, len, depth, height, alongX, sides, baseY, wood)
+	local function sb(u1, u2, y1, y2, d1, d2, color, material, opts)
+		if alongX then
+			return block(parent, cx + u1, baseY + y1, cz + d1, cx + u2, baseY + y2, cz + d2, color, material, opts)
+		end
+		return block(parent, cx + d1, baseY + y1, cz + u1, cx + d2, baseY + y2, cz + u2, color, material, opts)
+	end
+	local hl = len / 2
+	local hd = depth / 2
+	sb(-hl, hl, 0, height, -0.1, 0.1, DARK, WOOD)
+	sb(-hl, -hl + 0.3, 0, height, -hd, hd, wood, WOOD)
+	sb(hl - 0.3, hl, 0, height, -hd, hd, wood, WOOD)
+	local levels = math.max(2, math.floor(height / 2.6))
+	local step = height / levels
+	for i = 0, levels do
+		sb(-hl, hl, i * step, i * step + 0.3, -hd, hd, wood, WOOD)
+	end
+	sb(-hl - 0.1, hl + 0.1, height + 0.3, height + 0.55, -hd - 0.1, hd + 0.1, shade(wood, 1.15), WOOD, NOC)
+	for _, s in ipairs(sides) do
+		for i = 0, levels - 1 do
+			local boardTop = i * step + 0.3
+			local u = -hl + 0.45
+			while u < hl - 0.9 do
+				local w = rand(0.55, 1.4)
+				if u + w > hl - 0.4 then
+					break
+				end
+				if not chance(0.07) then
+					local bh = rand(1.3, step - 0.4)
+					local d1 = 0.15
+					local d2 = hd - 0.15
+					if s < 0 then
+						d1 = -(hd - 0.15)
+						d2 = -0.15
+					end
+					sb(u, u + w, boardTop, boardTop + bh, d1, d2, pick(BOOK_COLORS), PLASTIC, NOCQ)
+				end
+				u = u + w + 0.03
+			end
+		end
+	end
+end
+
+local function ladderZ(parent, x, z, y2)
+	local lw = rgb(120, 84, 48)
+	block(parent, x - 0.1, 0.2, z - 0.85, x + 0.1, y2, z - 0.65, lw, WOOD, NOCQ)
+	block(parent, x - 0.1, 0.2, z + 0.65, x + 0.1, y2, z + 0.85, lw, WOOD, NOCQ)
+	local y = 1.0
+	while y < y2 do
+		block(parent, x - 0.07, y, z - 0.65, x + 0.07, y + 0.12, z + 0.65, lw, WOOD, NOCQ)
+		y = y + 0.9
+	end
+end
+
+local function globe(parent, x, z)
+	cylinder(parent, x, 0.15, z, 0.3, 1.8, DARK, WOOD, NOCQ)
+	cylinder(parent, x, 2.0, z, 3.4, 0.2, BRASS, METAL, NOCQ)
+	ball(parent, x, 4.6, z, 2.6, rgb(52, 98, 130), PLASTIC)
+	ball(parent, x + 0.9, 4.9, z + 0.8, 1.0, rgb(86, 130, 82), PLASTIC)
+	ball(parent, x - 1.0, 4.2, z - 0.8, 0.8, rgb(150, 126, 84), PLASTIC)
+end
+
+local function bust(parent, x, z)
+	block(parent, x - 0.9, 0, z - 0.9, x + 0.9, 0.5, z + 0.9, WHITE, MARBLE)
+	block(parent, x - 0.65, 0.5, z - 0.65, x + 0.65, 3.0, z + 0.65, WHITE, MARBLE)
+	block(parent, x - 0.85, 3.0, z - 0.85, x + 0.85, 3.3, z + 0.85, WHITE, MARBLE)
+	block(parent, x - 0.8, 3.3, z - 0.45, x + 0.8, 4.1, z + 0.45, WHITE, MARBLE, NOC)
+	cylinder(parent, x, 4.35, z, 0.5, 0.55, WHITE, MARBLE, NOCQ)
+	ball(parent, x, 5.0, z, 1.1, WHITE, MARBLE)
+end
+
+-- chimenea pegada a la pared del fondo (x = centro, z1 = pared)
+local function fireplace(parent, x, z1, H)
+	local stone = rgb(112, 106, 100)
+	local depth = 2.6
+	block(parent, x - 3.6, 0, z1 - depth, x - 2.1, 8, z1, stone, SLATE)
+	block(parent, x + 2.1, 0, z1 - depth, x + 3.6, 8, z1, stone, SLATE)
+	block(parent, x - 2.1, 4.8, z1 - depth, x + 2.1, 8, z1, stone, SLATE)
+	block(parent, x - 2.1, 0, z1 - depth + 0.2, x + 2.1, 0.4, z1, rgb(60, 56, 54), SLATE)
+	block(parent, x - 2.1, 0.4, z1 - 0.4, x + 2.1, 4.8, z1 - 0.2, rgb(30, 24, 22), SLATE, NOC)
+	block(parent, x - 4.1, 8, z1 - depth - 0.4, x + 4.1, 8.5, z1, shade(stone, 1.15), SLATE)
+	block(parent, x - 3.0, 8.5, z1 - 1.6, x + 3.0, H, z1, stone, SLATE)
+	cylX(parent, x, 0.8, z1 - 1.2, 2.8, 0.7, rgb(80, 52, 30), WOOD, NOC)
+	cylX(parent, x, 1.3, z1 - 1.0, 2.4, 0.6, rgb(70, 46, 28), WOOD, NOC)
+	local fire = ball(parent, x, 1.6, z1 - 1.1, 1.3, rgb(255, 130, 30), NEON)
+	ball(parent, x - 0.5, 1.4, z1 - 1.1, 0.9, rgb(255, 190, 60), NEON)
+	ball(parent, x + 0.5, 1.5, z1 - 1.0, 0.8, rgb(255, 90, 20), NEON)
+	addLight(fire, 30, 1.8, rgb(255, 150, 70))
+	vase(parent, x - 2.6, 8.5, z1 - 1.0)
+	vase(parent, x + 2.6, 8.5, z1 - 1.0)
+end
+
+-- coloca una chimenea si cabe lejos de la puerta de salida
+local function tryFireplace(ctx)
+	local candidates = {}
+	local lx = ctx.xl + 5.5
+	local rx = ctx.xr - 5.5
+	if ctx.hasExit then
+		if math.abs(lx - ctx.exitX) >= 9 then
+			table.insert(candidates, lx)
+		end
+		if math.abs(rx - ctx.exitX) >= 9 then
+			table.insert(candidates, rx)
+		end
+	else
+		table.insert(candidates, lx)
+		table.insert(candidates, rx)
+	end
+	if #candidates == 0 then
+		return false
+	end
+	fireplace(ctx.parent, pick(candidates), ctx.z1, ctx.H)
+	return true
+end
+
+local function stainedGlass(parent, cx, z1, y1, y2, w)
+	local cols = 6
+	local rows = 8
+	local cw = w / cols
+	local rh = (y2 - y1) / rows
+	local colors = { rgb(40, 70, 140), rgb(70, 50, 120), rgb(150, 110, 40), rgb(40, 110, 110), rgb(120, 40, 60) }
+	for i = 0, cols - 1 do
+		for j = 0, rows - 1 do
+			block(parent, cx - w / 2 + i * cw, y1 + j * rh, z1 - 0.12, cx - w / 2 + (i + 1) * cw, y1 + (j + 1) * rh, z1 - 0.02, pick(colors), NEON, NOCQ)
+		end
+	end
+	local lead = rgb(24, 20, 18)
+	for i = 0, cols do
+		block(parent, cx - w / 2 + i * cw - 0.08, y1 - 0.08, z1 - 0.2, cx - w / 2 + i * cw + 0.08, y2 + 0.08, z1 - 0.02, lead, METAL, NOCQ)
+	end
+	for j = 0, rows do
+		block(parent, cx - w / 2 - 0.08, y1 + j * rh - 0.08, z1 - 0.2, cx + w / 2 + 0.08, y1 + j * rh + 0.08, z1 - 0.02, lead, METAL, NOCQ)
+	end
+end
+
+---------------------------------------------------------------------
+-- CASCARON DE LA HABITACION Y PUERTA
+---------------------------------------------------------------------
+local function doorTrim(parent, dx, zFace, dirIn)
+	local zOut = zFace + dirIn * 0.15
+	block(parent, dx - 3.5, 0, zFace, dx - 3, 9.5, zOut, DARK, WOOD, NOC)
+	block(parent, dx + 3, 0, zFace, dx + 3.5, 9.5, zOut, DARK, WOOD, NOC)
+	block(parent, dx - 3.5, 9, zFace, dx + 3.5, 9.5, zOut, DARK, WOOD, NOC)
+end
+
+-- pared en z (grosor 1) con un hueco de puerta opcional en x = doorX
+local function zWall(ctx, zA, zB, doorX)
+	local p, xl, xr, H = ctx.parent, ctx.xl, ctx.xr, ctx.H
+	if not doorX then
+		block(p, xl, 0, zA, xr, H, zB, ctx.wallColor, FABRIC)
+		return
+	end
+	block(p, xl, 0, zA, doorX - DOOR_W / 2, H, zB, ctx.wallColor, FABRIC)
+	block(p, doorX + DOOR_W / 2, 0, zA, xr, H, zB, ctx.wallColor, FABRIC)
+	block(p, doorX - DOOR_W / 2, DOOR_H, zA, doorX + DOOR_W / 2, H, zB, ctx.wallColor, FABRIC)
+end
+
+local function crown(ctx)
+	local p, xl, xr, z0, z1, H = ctx.parent, ctx.xl, ctx.xr, ctx.z0, ctx.z1, ctx.H
+	local c = shade(ctx.ceilColor, 0.8)
+	block(p, xl, H - 0.6, z0, xl + 0.35, H, z1, c, PLASTIC, NOC)
+	block(p, xr - 0.35, H - 0.6, z0, xr, H, z1, c, PLASTIC, NOC)
+	block(p, xl, H - 0.6, z0, xr, H, z0 + 0.35, c, PLASTIC, NOC)
+	block(p, xl, H - 0.6, z1 - 0.35, xr, H, z1, c, PLASTIC, NOC)
+end
+
+local function stripes(ctx)
+	local p = ctx.parent
+	local c = shade(ctx.wallColor, 1.22)
+	local z = ctx.z0 + 1.5
+	while z < ctx.z1 - 1 do
+		block(p, ctx.xl, 3.5, z, ctx.xl + 0.05, ctx.H - 0.6, z + 0.5, c, FABRIC, NOCQ)
+		block(p, ctx.xr - 0.05, 3.5, z, ctx.xr, ctx.H - 0.6, z + 0.5, c, FABRIC, NOCQ)
+		z = z + 3
+	end
+end
+
+local function buildShell(ctx)
+	local p, xl, xr, z0, z1, H = ctx.parent, ctx.xl, ctx.xr, ctx.z0, ctx.z1, ctx.H
+	block(p, xl - 1, -1, z0 - 1, xr + 1, 0, z1 + 1, ctx.floorColor, ctx.floorMat)
+	block(p, xl - 1, H, z0 - 1, xr + 1, H + 1, z1 + 1, ctx.ceilColor, PLASTIC)
+	block(p, xl - 1, 0, z0 - 1, xl, H, z1 + 1, ctx.wallColor, FABRIC)
+	block(p, xr, 0, z0 - 1, xr + 1, H, z1 + 1, ctx.wallColor, FABRIC)
+	if ctx.hasEntry then
+		zWall(ctx, z0 - 1, z0, ctx.ox)
+		doorTrim(p, ctx.ox, z0, 1)
+	else
+		zWall(ctx, z0 - 1, z0, nil)
+	end
+	if ctx.hasExit then
+		zWall(ctx, z1, z1 + 1, ctx.exitX)
+		doorTrim(p, ctx.exitX, z1, -1)
+	else
+		zWall(ctx, z1, z1 + 1, nil)
+	end
+	-- zocalo de madera y moldura en las paredes laterales
+	block(p, xl, 0, z0, xl + 0.12, 3.2, z1, DARK, WOOD, NOC)
+	block(p, xr - 0.12, 0, z0, xr, 3.2, z1, DARK, WOOD, NOC)
+	block(p, xl, 3.2, z0, xl + 0.2, 3.5, z1, MID, WOOD, NOC)
+	block(p, xr - 0.2, 3.2, z0, xr, 3.5, z1, MID, WOOD, NOC)
+	crown(ctx)
+	if ctx.stripes then
+		stripes(ctx)
+	end
+end
+
+local function buildDoor(parent, number, ex, zc)
+	local model = Instance.new("Model")
+	model.Name = "Puerta" .. number
+	local x1 = ex - DOOR_W / 2 + 0.05
+	local x2 = ex + DOOR_W / 2 - 0.05
+	local panel = block(model, x1, 0.05, zc - 0.3, x2, DOOR_H - 0.05, zc + 0.3, rgb(98, 62, 36), WOOD)
+	panel.Name = "Hoja"
+	block(model, x1 + 0.7, 0.8, zc - 0.34, x2 - 0.7, 4.3, zc - 0.3, rgb(78, 48, 28), WOOD, NOC)
+	block(model, x1 + 0.7, 4.9, zc - 0.34, x2 - 0.7, 8.2, zc - 0.3, rgb(78, 48, 28), WOOD, NOC)
+	-- placa grande con el numero
+	block(model, ex - 1.78, 5.92, zc - 0.38, ex + 1.78, 8.08, zc - 0.34, rgb(60, 42, 26), WOOD, NOC)
+	local plaque = block(model, ex - 1.6, 6.1, zc - 0.42, ex + 1.6, 7.9, zc - 0.38, BRASS, METAL, NOC)
+	local gui = Instance.new("SurfaceGui")
+	gui.Face = Enum.NormalId.Front
+	gui.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+	gui.CanvasSize = Vector2.new(320, 180)
+	gui.Parent = plaque
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 130
+	label.TextColor3 = rgb(40, 28, 16)
+	label.Text = string.format("%03d", number)
+	label.Parent = gui
+	ball(model, ex + 2.3, 4.5, zc - 0.58, 0.5, BRASS, METAL)
+	ball(model, ex + 2.3, 4.5, zc + 0.58, 0.5, BRASS, METAL)
+
+	local hinge = CFrame.new(x1, 0, zc)
+	model.WorldPivot = hinge
+
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = "Abrir"
+	prompt.ObjectText = "Puerta " .. string.format("%03d", number)
+	prompt.HoldDuration = 0
+	prompt.MaxActivationDistance = 9
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = panel
+
+	local opened = false
+	prompt.Triggered:Connect(function()
+		if opened then
+			return
+		end
+		opened = true
+		prompt.Enabled = false
+		panel.CanCollide = false
+		local value = Instance.new("NumberValue")
+		value.Value = 0
+		value.Changed:Connect(function(v)
+			model:PivotTo(hinge * CFrame.Angles(0, -math.rad(105) * v, 0))
+		end)
+		local tween = TweenService:Create(value, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Value = 1 })
+		tween:Play()
+		tween.Completed:Connect(function()
+			value:Destroy()
+		end)
+	end)
+
+	model.Parent = parent
+end
+
+---------------------------------------------------------------------
+-- TIPOS DE HABITACION
+---------------------------------------------------------------------
+local function furnishCorridor(ctx)
+	local p, cx = ctx.parent, ctx.cx
+	-- alfombra centrada con las puertas de entrada y salida
+	block(p, cx - 2.4, 0, ctx.z0, cx + 2.4, 0.08, ctx.z1, ctx.accent, FABRIC, NOCQ)
+	block(p, cx - 2.4, 0, ctx.z0, cx - 2.1, 0.1, ctx.z1, BRASS, PLASTIC, NOCQ)
+	block(p, cx + 2.1, 0, ctx.z0, cx + 2.4, 0.1, ctx.z1, BRASS, PLASTIC, NOCQ)
+	local clockPlaced = false
+	for i, zc in ipairs(zslots(ctx, 4, 4)) do
+		local sa = "L"
+		local sb = "R"
+		if i % 2 == 0 then
+			sa = "R"
+			sb = "L"
+		end
+		local wa, da = sideInfo(ctx, sa)
+		local wb, db = sideInfo(ctx, sb)
+		local r = rng:NextNumber()
+		if r < 0.35 then
+			painting(p, wa, da, zc, 5.8, rand(3, 4.5), rand(3.6, 5))
+		elseif r < 0.55 then
+			mirror(p, wa, da, zc, 5.8, 3.4, 5)
+		elseif r < 0.8 then
+			window(p, wa, da, zc, 6, 3.4, 5.4)
+		elseif not clockPlaced then
+			grandClock(p, wa, da, zc, ctx.wood)
+			clockPlaced = true
+		end
+		local r2 = rng:NextNumber()
+		if r2 < 0.4 then
+			local deco = "vase"
+			if chance(0.35) then
+				deco = "lamp"
+			elseif chance(0.3) then
+				deco = "books"
+			end
+			sideTable(p, wb, db, zc, 4, ctx.wood, deco)
+			if chance(0.6) then
+				painting(p, wb, db, zc, 6.2, 3.2, 3.6)
+			end
+		elseif r2 < 0.6 then
+			plant(p, wb + db * 1.1, zc, 1)
+		end
+		if zc + 4 < ctx.z1 - 5 then
+			sconce(p, wa, da, zc + 4, 6.8)
+			sconce(p, wb, db, zc + 4, 6.8)
+		end
+	end
+	local n = math.max(2, math.floor(ctx.L / 14))
+	for i = 1, n do
+		pendant(p, cx, ctx.z0 + ctx.L * (i - 0.5) / n, ctx.H, ctx.H - 3.2, 26, 1.3)
+	end
+end
+
+local function furnishLounge(ctx)
+	local p, cx = ctx.parent, ctx.cx
+	local zm = ctx.z0 + ctx.L / 2
+	local cloth = pick(FABRICS)
+	rug(p, cx - 6.5, zm - 5.5, cx + 6.5, zm + 5.5, ctx.accent, shade(ctx.accent, 0.6))
+	tableBox(p, cx, zm, 5, 3, 1.8, ctx.wood)
+	bookStack(p, cx - 1, 1.8, zm)
+	vase(p, cx + 1.2, 1.8, zm + 0.2)
+	couch(p, ctx.xl, 1, zm, 8, cloth)
+	couch(p, ctx.xr, -1, zm, 8, cloth)
+	painting(p, ctx.xl, 1, zm, 6.4, 7, 4)
+	painting(p, ctx.xr, -1, zm, 6.4, 7, 4)
+	floorLamp(p, ctx.xl + 1, zm + 5.4)
+	floorLamp(p, ctx.xr - 1, zm - 5.4)
+	for _, zc in ipairs(zslots(ctx, 5, 1.5)) do
+		if math.abs(zc - zm) > 6.5 then
+			local side = "L"
+			if chance(0.5) then
+				side = "R"
+			end
+			local wallX, dir = sideInfo(ctx, side)
+			local r = rng:NextNumber()
+			if r < 0.35 then
+				shelf(p, wallX + dir * 1.1, zc, 5, 2.2, 8, false, { dir }, 0, ctx.wood)
+			elseif r < 0.55 then
+				plant(p, wallX + dir * 1.2, zc, 1.1)
+			elseif r < 0.8 then
+				window(p, wallX, dir, zc, 6.5, 3.4, 5.5)
+			end
+		end
+	end
+	if chance(0.6) then
+		tryFireplace(ctx)
+	end
+	pendant(p, cx, zm, ctx.H, ctx.H - 3, 28, 1.4)
+end
+
+local function furnishBedroom(ctx)
+	local p, cx = ctx.parent, ctx.cx
+	local sheet = pick(FABRICS)
+	for i, zc in ipairs(zslots(ctx, 8, 2.5)) do
+		for _, side in ipairs({ "L", "R" }) do
+			local wallX, dir = sideInfo(ctx, side)
+			local r = rng:NextNumber()
+			if i == 1 and side == "L" then
+				r = 0
+			end
+			if r < 0.55 then
+				bed(p, wallX, dir, zc, ctx.wood, sheet)
+				local deco = "vase"
+				if chance(0.6) then
+					deco = "lamp"
+				end
+				sideTable(p, wallX, dir, zc - 5, 1.8, ctx.wood, deco)
+			elseif r < 0.75 then
+				wardrobe(p, wallX, dir, zc, ctx.wood)
+			elseif r < 0.9 then
+				cabinet(p, wallX, dir, zc, 5, 3.2, ctx.wood, 3)
+				mirror(p, wallX, dir, zc, 6.4, 3.6, 4.4)
+				tableLamp(p, wallX + dir * 1.0, 3.4, zc - 1.5)
+			else
+				window(p, wallX, dir, zc, 6.5, 3.6, 5.5)
+			end
+		end
+	end
+	pendant(p, cx, ctx.z0 + ctx.L / 2, ctx.H, ctx.H - 3, 26, 1.2)
+end
+
+local function furnishDining(ctx)
+	local p, cx = ctx.parent, ctx.cx
+	local tz0 = ctx.z0 + 10
+	local tz1 = ctx.z1 - 10
+	local zm = (tz0 + tz1) / 2
+	local tlen = tz1 - tz0
+	rug(p, cx - 7, tz0 - 2.5, cx + 7, tz1 + 2.5, ctx.accent, shade(ctx.accent, 0.6))
+	tableBox(p, cx, zm, 5, tlen, 3, ctx.wood)
+	block(p, cx - 1.4, 3.0, tz0 + 0.4, cx + 1.4, 3.04, tz1 - 0.4, WHITE, FABRIC, NOCQ)
+	local cush = pick(FABRICS)
+	local z = tz0 + 1.6
+	while z <= tz1 - 1.2 do
+		chair(p, cx - 3.9, z, "-x", ctx.wood, cush)
+		chair(p, cx + 3.9, z, "+x", ctx.wood, cush)
+		plate(p, cx - 1.8, 3.0, z)
+		plate(p, cx + 1.8, 3.0, z)
+		z = z + 3.2
+	end
+	for i = 1, 3 do
+		local cz = zm + (i - 2) * (tlen / 4)
+		cylinder(p, cx, 3.55, cz, 1, 0.3, WHITE, PLASTIC, NOCQ)
+		ball(p, cx, 4.2, cz, 0.35, WARM, NEON)
+	end
+	chandelier(p, cx, zm, ctx.H, ctx.H - 5, 3, 32, 1.6)
+	for i, zc in ipairs(zslots(ctx, 7, 3)) do
+		local sa = "L"
+		local sb = "R"
+		if i % 2 == 0 then
+			sa = "R"
+			sb = "L"
+		end
+		local wa, da = sideInfo(ctx, sa)
+		local wb, db = sideInfo(ctx, sb)
+		sideTable(p, wa, da, zc, 7, ctx.wood, "vase")
+		painting(p, wa, da, zc, 6.5, 5, 4)
+		if chance(0.6) then
+			window(p, wb, db, zc, 6.5, 3.6, 5.5)
+		else
+			plant(p, wb + db * 1.2, zc, 1.1)
+		end
+	end
+	if chance(0.5) then
+		tryFireplace(ctx)
+	end
+end
+
+local function furnishBallroom(ctx)
+	local p, cx = ctx.parent, ctx.cx
+	local off = ctx.W / 2 - 5
+	for _, zc in ipairs(zslots(ctx, 4, 4)) do
+		column(p, cx - off, zc, ctx.H)
+		column(p, cx + off, zc, ctx.H)
+	end
+	rug(p, cx - off + 2, ctx.z0 + 8, cx + off - 2, ctx.z1 - 8, ctx.accent, shade(ctx.accent, 0.6))
+	chandelier(p, cx, ctx.z0 + ctx.L * 0.3, ctx.H, ctx.H - 6, 4, 38, 1.8)
+	chandelier(p, cx, ctx.z0 + ctx.L * 0.7, ctx.H, ctx.H - 6, 4, 38, 1.8)
+	local cloth = pick(FABRICS)
+	for _, frac in ipairs({ 0.3, 0.7 }) do
+		for _, side in ipairs({ "L", "R" }) do
+			local wallX, dir = sideInfo(ctx, side)
+			local zc = ctx.z0 + ctx.L * frac
+			if side == "L" then
+				mirror(p, wallX, dir, zc, 8, 6, 9)
+			else
+				painting(p, wallX, dir, zc, 8, 7, 9)
+			end
+			if chance(0.6) then
+				couch(p, wallX, dir, zc, 6, cloth)
+			end
+		end
+	end
+	for _, side in ipairs({ "L", "R" }) do
+		local wallX, dir = sideInfo(ctx, side)
+		window(p, wallX, dir, ctx.z0 + ctx.L * 0.5, 8, 4, 9)
+	end
+end
+
+local function furnishStudy(ctx)
+	local p, cx = ctx.parent, ctx.cx
+	local cloth = pick(FABRICS)
+	for _, zc in ipairs(zslots(ctx, 7, 1)) do
+		local wallX, dir = sideInfo(ctx, "L")
+		shelf(p, wallX + dir * 1.1, zc, 7, 2.2, 9, false, { dir }, 0, ctx.wood)
+		local wx, d = sideInfo(ctx, "R")
+		local r = rng:NextNumber()
+		if r < 0.35 then
+			shelf(p, wx + d * 1.1, zc, 7, 2.2, 9, false, { d }, 0, ctx.wood)
+		elseif r < 0.75 then
+			tableBox(p, wx + d * 1.8, zc, 3.4, 6, 3, ctx.wood)
+			tableLamp(p, wx + d * 1.8, 3, zc - 1.5)
+			bookStack(p, wx + d * 1.8, 3, zc + 1.2)
+			local back = "-x"
+			if d == 1 then
+				back = "+x"
+			end
+			chair(p, wx + d * 4.6, zc, back, ctx.wood, cloth)
+		else
+			couch(p, wx, d, zc, 3.5, cloth)
+			floorLamp(p, wx + d * 1, zc + 3)
+		end
+	end
+	rug(p, cx - 5, ctx.z0 + ctx.L / 2 - 4, cx + 5, ctx.z0 + ctx.L / 2 + 4, ctx.accent, shade(ctx.accent, 0.6))
+	globe(p, cx, ctx.z0 + ctx.L / 2)
+	if chance(0.5) then
+		tryFireplace(ctx)
+	end
+	pendant(p, cx, ctx.z0 + ctx.L / 2, ctx.H, ctx.H - 3, 26, 1.3)
+end
+
+local function furnishStore(ctx)
+	local p, cx = ctx.parent, ctx.cx
+	local slots = zslots(ctx, 3.4, 0.8)
+	local used = { L = {}, R = {} }
+	if #slots >= 3 then
+		local bi = math.floor(#slots / 2)
+		local side = "L"
+		if chance(0.5) then
+			side = "R"
+		end
+		local wallX, dir = sideInfo(ctx, side)
+		local zb = (slots[bi] + slots[bi + 1]) / 2
+		tableBox(p, wallX + dir * 1.5, zb, 2.6, 6.5, 3, ctx.wood)
+		tableLamp(p, wallX + dir * 1.5, 3, zb - 1.5)
+		bookStack(p, wallX + dir * 1.5, 3, zb + 1.5)
+		used[side][bi] = true
+		used[side][bi + 1] = true
+	end
+	for i, zc in ipairs(slots) do
+		for _, side in ipairs({ "L", "R" }) do
+			if not used[side][i] and chance(0.7) then
+				local wallX, dir = sideInfo(ctx, side)
+				local r = rng:NextNumber()
+				if r < 0.55 then
+					local count = randi(1, 3)
+					local y0 = 0
+					local s = 3.2
+					for _ = 1, count do
+						crate(p, wallX + dir * 1.8 + rand(-0.15, 0.15), y0, zc, s, pick(WOODS))
+						y0 = y0 + s
+						s = s * 0.88
+					end
+				elseif r < 0.8 then
+					barrel(p, wallX + dir * 1.3, zc)
+				else
+					sack(p, wallX + dir * 1.2, zc)
+				end
+			end
+		end
+	end
+	local n = math.max(2, math.floor(ctx.L / 12))
+	for i = 1, n do
+		pendant(p, cx, ctx.z0 + ctx.L * (i - 0.5) / n, ctx.H, ctx.H - 2.8, 24, 1.2)
+	end
+end
+
+local function furnishLobby(ctx)
+	local p, cx = ctx.parent, ctx.cx
+	block(p, cx - 3, 0, ctx.z0, cx + 3, 0.08, ctx.z1, rgb(110, 26, 30), FABRIC, NOCQ)
+	block(p, cx - 3, 0, ctx.z0, cx - 2.7, 0.1, ctx.z1, BRASS, PLASTIC, NOCQ)
+	block(p, cx + 2.7, 0, ctx.z0, cx + 3, 0.1, ctx.z1, BRASS, PLASTIC, NOCQ)
+	for _, dz in ipairs({ 14, 26, 38 }) do
+		column(p, cx - 9, ctx.z0 + dz, ctx.H)
+		column(p, cx + 9, ctx.z0 + dz, ctx.H)
+	end
+	local dx = ctx.xl
+	block(p, dx + 2, 0, ctx.z0 + 14, dx + 5, 3.6, ctx.z0 + 30, DARK, WOOD)
+	block(p, dx + 1.9, 3.6, ctx.z0 + 13.9, dx + 5.1, 3.9, ctx.z0 + 30.1, MID, WOOD)
+	addSurface(dx + 1.9, ctx.z0 + 13.9, dx + 5.1, ctx.z0 + 30.1, 3.9)
+	tableLamp(p, dx + 3.5, 3.9, ctx.z0 + 22)
+	bookStack(p, dx + 3.5, 3.9, ctx.z0 + 26)
+	cylinder(p, dx + 3.5, 4.05, ctx.z0 + 17, 0.3, 0.9, BRASS, METAL, NOCQ)
+	block(p, dx, 3.5, ctx.z0 + 14, dx + 0.3, 8, ctx.z0 + 30, DARK, WOOD, NOC)
+	for i = 0, 7 do
+		for j = 0, 1 do
+			block(p, dx + 0.3, 4.3 + j * 1.6, ctx.z0 + 15 + i * 1.8, dx + 0.45, 4.7 + j * 1.6, ctx.z0 + 15.4 + i * 1.8, BRASS, METAL, NOCQ)
+		end
+	end
+	local cloth = pick(FABRICS)
+	couch(p, ctx.xr, -1, ctx.z0 + 16, 7, cloth)
+	couch(p, ctx.xr, -1, ctx.z0 + 30, 7, cloth)
+	painting(p, ctx.xr, -1, ctx.z0 + 23, 7, 5, 4)
+	plant(p, ctx.xr - 1.4, ctx.z0 + 8, 1.2)
+	plant(p, ctx.xl + 1.4, ctx.z0 + 8, 1.2)
+	fireplace(p, cx - 10, ctx.z1, ctx.H)
+	fireplace(p, cx + 10, ctx.z1, ctx.H)
+	chandelier(p, cx, ctx.z0 + 14, ctx.H, ctx.H - 5, 3.5, 36, 1.6)
+	chandelier(p, cx, ctx.z0 + 34, ctx.H, ctx.H - 5, 3.5, 36, 1.6)
+	sign(p, cx - 5, 8, ctx.z0, cx + 5, 11, ctx.z0 + 0.2, Enum.NormalId.Back, "HOTEL", BRASS, rgb(40, 26, 18))
+
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Anchored = true
+	spawn.Size = Vector3.new(6, 0.2, 6)
+	spawn.CFrame = CFrame.new(cx, 0.1, ctx.z0 + 6) * CFrame.Angles(0, math.pi, 0)
+	spawn.Transparency = 1
+	spawn.CanCollide = false
+	spawn.Neutral = true
+	spawn.Duration = 0
+	spawn.Parent = p
+end
+
+local function furnishLibrary(ctx)
+	local p, cx, z0, z1, H = ctx.parent, ctx.cx, ctx.z0, ctx.z1, ctx.H
+	local xl, xr = ctx.xl, ctx.xr
+	local wood = rgb(92, 60, 34)
+
+	-- alfombra central con bordes dorados
+	block(p, cx - 5, 0, z0, cx + 5, 0.08, z1, rgb(104, 24, 28), FABRIC, NOCQ)
+	block(p, cx - 5, 0, z0, cx - 4.6, 0.1, z1, BRASS, PLASTIC, NOCQ)
+	block(p, cx + 4.6, 0, z0, cx + 5, 0.1, z1, BRASS, PLASTIC, NOCQ)
+	block(p, cx - 4.1, 0, z0, cx - 3.9, 0.1, z1, BRASS, PLASTIC, NOCQ)
+	block(p, cx + 3.9, 0, z0, cx + 4.1, 0.1, z1, BRASS, PLASTIC, NOCQ)
+
+	-- vigas del techo
+	for i = 0, 8 do
+		local zb = z0 + 6 + i * ((ctx.L - 12) / 8)
+		block(p, xl, H - 0.9, zb - 0.5, xr, H, zb + 0.5, rgb(54, 36, 24), WOOD, NOC)
+	end
+
+	-- filas de estanterias del piso (dobles, con libros por los dos lados)
+	for k = 0, 5 do
+		local zr = z0 + 34 + 10 * k
+		for _, sx in ipairs({ -1, 1 }) do
+			shelf(p, cx + sx * 13, zr, 10, 2.2, 10.5, true, { 1, -1 }, 0, wood)
+			shelf(p, cx + sx * 24, zr, 10, 2.2, 10.5, true, { 1, -1 }, 0, wood)
+		end
+		if k % 2 == 0 then
+			ladderZ(p, cx - 7.85, zr, 9.5)
+		else
+			ladderZ(p, cx + 7.85, zr, 9.5)
+		end
+	end
+
+	-- bustos junto a la alfombra y globos terraqueos
+	bust(p, cx - 6.2, z0 + 40)
+	bust(p, cx + 6.2, z0 + 50)
+	bust(p, cx - 6.2, z0 + 62)
+	bust(p, cx + 6.2, z0 + 74)
+	bust(p, cx - 6.2, z0 + 84)
+	globe(p, cx - 7.5, z0 + 24)
+	globe(p, cx + 7.5, z0 + 24)
+
+	-- zona de lectura al entrar
+	for _, sx in ipairs({ -1, 1 }) do
+		local tx = cx + sx * 14
+		rug(p, tx - 4.5, z0 + 7, tx + 4.5, z0 + 23, ctx.accent, shade(ctx.accent, 0.6))
+		tableBox(p, tx, z0 + 15, 4, 11, 3, wood)
+		for _, dz in ipairs({ -3.5, 0, 3.5 }) do
+			chair(p, tx - 3.1, z0 + 15 + dz, "-x", wood, rgb(70, 40, 40))
+			chair(p, tx + 3.1, z0 + 15 + dz, "+x", wood, rgb(70, 40, 40))
+		end
+		tableLamp(p, tx, 3, z0 + 12)
+		tableLamp(p, tx, 3, z0 + 18)
+		bookStack(p, tx, 3, z0 + 15)
+	end
+
+	-- escaleras, balcones superiores y estanterias de pared
+	local rise = 13.4 / 16
+	for _, side in ipairs({ "L", "R" }) do
+		local wallX, dir = sideInfo(ctx, side)
+		for i = 0, 15 do
+			block(p, wallX + dir * 2, 0, z0 + 3 + i * 1.5, wallX + dir * 7, (i + 1) * rise, z0 + 3 + (i + 1) * 1.5, wood, WOOD)
+		end
+		block(p, wallX, 12.4, z0 + 27, wallX + dir * 8, 13.4, z1 - 6, wood, PLANKS)
+		local rx = wallX + dir * 7.8
+		block(p, rx - 0.3, 11.6, z0 + 27, rx + 0.3, 12.4, z1 - 6, shade(wood, 0.8), WOOD, NOC)
+		block(p, rx - 0.2, 16.0, z0 + 27, rx + 0.2, 16.4, z1 - 6, DARK, WOOD)
+		block(p, rx - 0.15, 14.6, z0 + 27, rx + 0.15, 14.9, z1 - 6, DARK, WOOD)
+		block(p, rx - 0.2, 13.4, z0 + 27, rx + 0.2, 13.8, z1 - 6, DARK, WOOD)
+		local z = z0 + 27.2
+		while z <= z1 - 6 do
+			block(p, rx - 0.08, 13.8, z - 0.08, rx + 0.08, 16.0, z + 0.08, DARK, WOOD, NOC)
+			z = z + 1.6
+		end
+		for _, dz in ipairs({ 30, 46, 62, 78, 92 }) do
+			cylinder(p, wallX + dir * 1.3, 6.2, z0 + dz, 12.4, 1.2, rgb(70, 50, 34), WOOD)
+		end
+		for k = 0, 5 do
+			shelf(p, wallX + dir * 1.1, z0 + 33 + 10 * k, 10, 2.2, 10, false, { dir }, 13.4, wood)
+		end
+		-- mesita de lectura bajo el balcon, al fondo
+		tableBox(p, wallX + dir * 4.0, z0 + 91, 2.4, 2.4, 3, wood)
+		tableLamp(p, wallX + dir * 4.0, 3, z0 + 91)
+		for _, dz in ipairs({ 40, 62, 84 }) do
+			pendant(p, wallX + dir * 4.5, z0 + dz, H, 20, 22, 1.3)
+		end
+	end
+
+	-- rincones de lectura junto a las chimeneas del fondo
+	for _, sx in ipairs({ -1, 1 }) do
+		local fx = cx + sx * 15
+		fireplace(p, fx, z1, H)
+		rug(p, fx - 4, z1 - 10, fx + 4, z1 - 3.4, ctx.accent, shade(ctx.accent, 0.6))
+		chair(p, fx - 2.4, z1 - 6.5, "-z", wood, rgb(60, 80, 60))
+		chair(p, fx + 2.4, z1 - 6.5, "-z", wood, rgb(60, 80, 60))
+		tableBox(p, fx, z1 - 6.5, 1.8, 1.8, 2.4, wood)
+		tableLamp(p, fx, 2.4, z1 - 6.5)
+	end
+
+	-- vidriera sobre la puerta de salida
+	stainedGlass(p, cx, z1, 12, 26, 14)
+
+	-- aranas del centro
+	for _, dz in ipairs({ 12, 32, 52, 72, 92 }) do
+		chandelier(p, cx, z0 + dz, H, H - 7, 3.2, 44, 1.8)
+	end
+end
+
+local function furnishFinal(ctx)
+	local p, cx = ctx.parent, ctx.cx
+	block(p, cx - 3, 0, ctx.z0, cx + 3, 0.08, ctx.z1, rgb(110, 26, 30), FABRIC, NOCQ)
+	for _, dz in ipairs({ 8, 16, 24 }) do
+		column(p, cx - 8, ctx.z0 + dz, ctx.H)
+		column(p, cx + 8, ctx.z0 + dz, ctx.H)
+	end
+	chandelier(p, cx, ctx.z0 + 12, ctx.H, ctx.H - 5, 3, 34, 1.6)
+	chandelier(p, cx, ctx.z0 + 26, ctx.H, ctx.H - 5, 3, 34, 1.6)
+	sign(p, cx - 7, 4, ctx.z1 - 0.25, cx + 7, 9, ctx.z1, Enum.NormalId.Front, "Has llegado a la puerta 100\nFin de la demo", BRASS, rgb(34, 22, 16))
+	block(p, cx - 1.5, 0, ctx.z1 - 7.5, cx + 1.5, 1.2, ctx.z1 - 4.5, WHITE, MARBLE)
+	local orb = ball(p, cx, 2.4, ctx.z1 - 6, 1.6, WARM, NEON)
+	addLight(orb, 20, 1.6, WARM)
+	plant(p, ctx.xl + 1.5, ctx.z1 - 2, 1.2)
+	plant(p, ctx.xr - 1.5, ctx.z1 - 2, 1.2)
+end
+
+local SPEC_LOBBY = {
+	id = "vestibulo", name = "Vestíbulo", floor = "planks", furnish = furnishLobby, coins = { 1, 2 },
+	dims = function() return 36, 46, 16, 18, 0 end,
+}
+local SPEC_LIBRARY = {
+	id = "biblioteca", name = "Biblioteca", floor = "planks", furnish = furnishLibrary, coins = { 6, 9 },
+	wallColor = rgb(92, 62, 44), ceilColor = rgb(54, 38, 28),
+	dims = function() return 64, 100, 28, 32, 0 end,
+}
+local SPEC_FINAL = {
+	id = "salida", name = "Salida", furnish = furnishFinal, coins = { 0, 0 },
+	dims = function() return 26, 34, 14, 13, 0 end,
+}
+
+local RANDOM_SPECS = {
+	{ id = "pasillo", name = "Pasillo", weight = 2, furnish = furnishCorridor, coins = { 1, 2 },
+	  dims = function()
+	  	local w = randi(5, 6) * 2
+	  	return w, randi(40, 64), 11, w / 2, 0
+	  end },
+	{ id = "sala", name = "Sala de estar", weight = 2, furnish = furnishLounge,
+	  dims = function() return randi(22, 30), randi(22, 32), randi(12, 13) end },
+	{ id = "dormitorio", name = "Dormitorio", weight = 2, furnish = furnishBedroom,
+	  dims = function() return randi(20, 26), randi(22, 30), 12 end },
+	{ id = "comedor", name = "Comedor", weight = 1, floor = "planks", furnish = furnishDining,
+	  dims = function() return randi(22, 30), randi(28, 40), 13 end },
+	{ id = "salon", name = "Salón de baile", weight = 1, floor = "planks", furnish = furnishBallroom,
+	  dims = function() return randi(30, 38), randi(32, 44), randi(16, 18) end },
+	{ id = "estudio", name = "Estudio", weight = 2, furnish = furnishStudy,
+	  dims = function() return randi(20, 26), randi(22, 30), 12 end },
+	{ id = "almacen", name = "Almacén", weight = 2, furnish = furnishStore,
+	  dims = function() return randi(18, 26), randi(22, 32), 11 end },
+}
+
+---------------------------------------------------------------------
+-- MONEDAS
+---------------------------------------------------------------------
+local coinList = {}
+
+local function spawnCoin(parent, x, y, z)
+	local coin = Instance.new("Part")
+	coin.Name = "Moneda"
+	coin.Anchored = true
+	coin.CanCollide = false
+	coin.CanQuery = false
+	coin.CastShadow = false
+	coin.Shape = Enum.PartType.Cylinder
+	coin.Size = Vector3.new(0.14, 0.95, 0.95)
+	coin.CFrame = CFrame.new(x, y + 0.65, z)
+	coin.Color = COIN_COLOR
+	coin.Material = NEON
+	CollectionService:AddTag(coin, "Moneda")
+	coin.Parent = parent
+	return coin
+end
+
+local function placeCoins(ctx, spec, model)
+	if not surfaces or #surfaces == 0 then
+		return
+	end
+	local lo = 1
+	local hi = 3
+	if spec.coins then
+		lo = spec.coins[1]
+		hi = spec.coins[2]
+	end
+	local n = randi(lo, hi)
+	for _ = 1, n do
+		local s = pick(surfaces)
+		local x = (s.x1 + s.x2) / 2
+		local z = (s.z1 + s.z2) / 2
+		if s.x2 - s.x1 > 1.6 then
+			x = rand(s.x1 + 0.6, s.x2 - 0.6)
+		end
+		if s.z2 - s.z1 > 1.6 then
+			z = rand(s.z1 + 0.6, s.z2 - 0.6)
+		end
+		local coin = spawnCoin(model, x, s.y, z)
+		table.insert(coinList, { part = coin, zStart = ctx.z0, zEnd = ctx.z1 + 2 })
+	end
+end
+
+local function collectCoin(player, part)
+	player:SetAttribute("Coins", (player:GetAttribute("Coins") or 0) + 1)
+	CollectionService:RemoveTag(part, "Moneda")
+	part.Transparency = 1
+	local sound = Instance.new("Sound")
+	sound.SoundId = "rbxasset://sounds/electronicpingshort.wav"
+	sound.Volume = 0.7
+	sound.PlaybackSpeed = 1.5
+	sound.RollOffMaxDistance = 40
+	sound.Parent = part
+	sound:Play()
+	Debris:AddItem(part, 2)
+end
+
+local function updateCoins()
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if root then
+			local pos = root.Position
+			for i = #coinList, 1, -1 do
+				local c = coinList[i]
+				if not c.part.Parent then
+					table.remove(coinList, i)
+				elseif pos.Z >= c.zStart and pos.Z < c.zEnd and (pos - c.part.Position).Magnitude <= COIN_RADIUS then
+					table.remove(coinList, i)
+					collectCoin(player, c.part)
+				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------
+-- GENERACION
+---------------------------------------------------------------------
+local rooms = {}
+local highest = -1
+local lastId = nil
+
+local function pickSpec()
+	local total = 0
+	for _, s in ipairs(RANDOM_SPECS) do
+		total = total + s.weight
+	end
+	for _ = 1, 8 do
+		local r = rng:NextNumber() * total
+		for _, s in ipairs(RANDOM_SPECS) do
+			r = r - s.weight
+			if r <= 0 then
+				if s.id ~= lastId then
+					return s
+				end
+				break
+			end
+		end
+	end
+	return RANDOM_SPECS[1]
+end
+
+local function generateRoom(index)
+	local prev = rooms[index - 1]
+	local origin = Vector3.new(0, 0, 0)
+	if prev then
+		origin = prev.nextOrigin
+	end
+
+	local spec
+	if index == 0 then
+		spec = SPEC_LOBBY
+	elseif index == LIBRARY_DOOR then
+		spec = SPEC_LIBRARY
+	elseif index == TOTAL_DOORS then
+		spec = SPEC_FINAL
+	else
+		spec = pickSpec()
+	end
+	lastId = spec.id
+
+	local W, L, H, a, e = spec.dims()
+	if not a then
+		a = rand(4, W - 4)
+	end
+	local xmin = -a
+	local xmax = W - a
+	if not e then
+		e = rand(xmin + 4, xmax - 4)
+	end
+
+	local model = Instance.new("Model")
+	model.Name = string.format("Hab%03d_%s", index, spec.id)
+
+	local ctx = {
+		index = index,
+		parent = model,
+		ox = origin.X,
+		xl = origin.X + xmin,
+		xr = origin.X + xmax,
+		z0 = origin.Z,
+		z1 = origin.Z + L,
+		W = W, L = L, H = H,
+		cx = origin.X + (xmin + xmax) / 2,
+		exitX = origin.X + e,
+		hasEntry = index > 0,
+		hasExit = index < TOTAL_DOORS,
+		wallColor = spec.wallColor or pick(WALLPAPERS),
+		ceilColor = spec.ceilColor or pick(CEILINGS),
+		floorColor = pick(CARPETS),
+		floorMat = FABRIC,
+		accent = pick(CARPETS),
+		wood = pick(WOODS),
+		stripes = (spec.id ~= "biblioteca") and chance(0.5),
+	}
+	if spec.floor == "planks" then
+		ctx.floorColor = rgb(104, 70, 42)
+		ctx.floorMat = PLANKS
+	end
+
+	buildShell(ctx)
+	if ctx.hasExit then
+		buildDoor(model, index + 1, ctx.exitX, ctx.z1 + 1)
+	end
+
+	surfaces = {}
+	local ok, err = pcall(spec.furnish, ctx)
+	if not ok then
+		warn("Hotel: error amueblando la habitacion " .. index .. ": " .. tostring(err))
+	end
+	local okc, errc = pcall(placeCoins, ctx, spec, model)
+	if not okc then
+		warn("Hotel: error colocando monedas en la habitacion " .. index .. ": " .. tostring(errc))
+	end
+	surfaces = nil
+
+	rooms[index] = {
+		index = index,
+		model = model,
+		name = spec.name,
+		ox = ctx.ox,
+		z0 = ctx.z0,
+		zStart = ctx.z0,
+		zEnd = ctx.z1 + 2,
+		nextOrigin = Vector3.new(ctx.exitX, 0, ctx.z1 + 2),
+		ctx = ctx,
+		sealed = false,
+	}
+	model.Parent = hotel
+end
+
+local function roomIndexAt(z)
+	local lowest, top
+	for idx, r in pairs(rooms) do
+		if z >= r.zStart and z < r.zEnd then
+			return idx
+		end
+		if not lowest or idx < lowest then
+			lowest = idx
+		end
+		if not top or idx > top then
+			top = idx
+		end
+	end
+	if not lowest then
+		return nil
+	end
+	if z < rooms[lowest].zStart then
+		return lowest
+	end
+	return top
+end
+
+local function oldestIndex()
+	local oldest
+	for idx in pairs(rooms) do
+		if not oldest or idx < oldest then
+			oldest = idx
+		end
+	end
+	return oldest
+end
+
+-- cierra con pared la puerta de atras de la habitacion mas antigua
+local function sealStart(room)
+	if room.sealed or room.index == 0 then
+		return
+	end
+	room.sealed = true
+	local c = room.ctx
+	block(room.model, c.ox - DOOR_W / 2, 0, c.z0 - 1, c.ox + DOOR_W / 2, DOOR_H, c.z0, c.wallColor, FABRIC)
+end
+
+local function updateRooms()
+	local maxIdx, minIdx
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		local root = character and character:FindFirstChild("HumanoidRootPart")
+		if root then
+			local idx = roomIndexAt(root.Position.Z)
+			if idx then
+				if player:GetAttribute("Room") ~= idx then
+					player:SetAttribute("RoomName", rooms[idx].name)
+					player:SetAttribute("Room", idx)
+				end
+				if not maxIdx or idx > maxIdx then
+					maxIdx = idx
+				end
+				if not minIdx or idx < minIdx then
+					minIdx = idx
+				end
+			end
+		end
+	end
+	if not maxIdx then
+		return
+	end
+
+	local target = math.min(TOTAL_DOORS, maxIdx + ROOMS_AHEAD)
+	while highest < target do
+		generateRoom(highest + 1)
+		highest = highest + 1
+	end
+
+	for idx, room in pairs(rooms) do
+		if idx < minIdx - ROOMS_BEHIND then
+			room.model:Destroy()
+			rooms[idx] = nil
+		end
+	end
+	local oldest = oldestIndex()
+	if oldest and rooms[oldest] then
+		sealStart(rooms[oldest])
+	end
+end
+
+---------------------------------------------------------------------
+-- JUGADORES
+---------------------------------------------------------------------
+local function loadPlayer(player)
+	pcall(function()
+		player:LoadCharacter()
+	end)
+	local character = player.Character
+	if not character then
+		return
+	end
+	local target
+	local idx = player:GetAttribute("Room")
+	if idx and idx > 0 and rooms[idx] then
+		target = rooms[idx]
+	elseif not rooms[0] then
+		local oldest = oldestIndex()
+		if oldest then
+			target = rooms[oldest]
+		end
+	end
+	if target then
+		character:PivotTo(CFrame.new(target.ox, 4, target.z0 + 4) * CFrame.Angles(0, math.pi, 0))
+	end
+end
+
+local function onPlayerAdded(player)
+	player:SetAttribute("Coins", 0)
+	if FIRST_PERSON then
+		player.CameraMode = Enum.CameraMode.LockFirstPerson
+	end
+	player.CharacterAdded:Connect(function(character)
+		local humanoid = character:WaitForChild("Humanoid", 10)
+		if humanoid then
+			humanoid.Died:Connect(function()
+				task.wait(2.5)
+				if player.Parent then
+					loadPlayer(player)
+				end
+			end)
+		end
+	end)
+	loadPlayer(player)
+end
+
+---------------------------------------------------------------------
+-- ARRANQUE
+---------------------------------------------------------------------
+for i = 0, ROOMS_AHEAD do
+	generateRoom(i)
+	highest = i
+end
+
+Players.PlayerAdded:Connect(function(player)
+	task.spawn(onPlayerAdded, player)
+end)
+for _, player in ipairs(Players:GetPlayers()) do
+	task.spawn(onPlayerAdded, player)
+end
+
+task.spawn(function()
+	while true do
+		task.wait(0.25)
+		local ok, err = pcall(updateRooms)
+		if not ok then
+			warn("Hotel: " .. tostring(err))
+		end
+	end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(0.12)
+		local ok, err = pcall(updateCoins)
+		if not ok then
+			warn("Hotel monedas: " .. tostring(err))
+		end
+	end
+end)
+]]></ProtectedString>
+</Properties>
+</Item>
+</Item>
+<Item class="StarterPlayer" referent="RBX00000000000000000000000000000008">
+<Properties>
+<string name="Name">StarterPlayer</string>
+<token name="CameraMode">1</token>
+</Properties>
+<Item class="StarterPlayerScripts" referent="RBX00000000000000000000000000000006">
+<Properties>
+<string name="Name">StarterPlayerScripts</string>
+</Properties>
+<Item class="LocalScript" referent="RBX00000000000000000000000000000007">
+<Properties>
+<string name="Name">InterfazHotel</string>
+<ProtectedString name="Source"><![CDATA[-- Interfaz del hotel: habitacion actual, contador de monedas y monedas giratorias.
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local CollectionService = game:GetService("CollectionService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "HotelHUD"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.Parent = playerGui
+
+-- habitacion actual
+local small = Instance.new("TextLabel")
+small.AnchorPoint = Vector2.new(0.5, 0)
+small.Position = UDim2.new(0.5, 0, 0, 16)
+small.Size = UDim2.fromOffset(420, 28)
+small.BackgroundTransparency = 1
+small.Font = Enum.Font.Antique
+small.TextSize = 22
+small.TextColor3 = Color3.fromRGB(235, 222, 196)
+small.TextStrokeTransparency = 0.5
+small.Text = ""
+small.Parent = gui
+
+-- titulo grande en salas especiales
+local big = Instance.new("TextLabel")
+big.AnchorPoint = Vector2.new(0.5, 0.5)
+big.Position = UDim2.fromScale(0.5, 0.32)
+big.Size = UDim2.fromOffset(700, 90)
+big.BackgroundTransparency = 1
+big.Font = Enum.Font.Antique
+big.TextSize = 64
+big.TextColor3 = Color3.fromRGB(240, 226, 190)
+big.TextStrokeTransparency = 1
+big.TextTransparency = 1
+big.Text = ""
+big.Parent = gui
+
+-- contador de monedas
+local counter = Instance.new("Frame")
+counter.AnchorPoint = Vector2.new(0.5, 0)
+counter.Position = UDim2.new(0.5, 0, 0, 50)
+counter.Size = UDim2.fromOffset(150, 34)
+counter.BackgroundColor3 = Color3.fromRGB(24, 16, 10)
+counter.BackgroundTransparency = 0.3
+counter.BorderSizePixel = 0
+counter.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = counter
+
+local icon = Instance.new("Frame")
+icon.AnchorPoint = Vector2.new(0, 0.5)
+icon.Position = UDim2.new(0, 10, 0.5, 0)
+icon.Size = UDim2.fromOffset(20, 20)
+icon.BackgroundColor3 = Color3.fromRGB(255, 205, 60)
+icon.BorderSizePixel = 0
+icon.Parent = counter
+
+local iconCorner = Instance.new("UICorner")
+iconCorner.CornerRadius = UDim.new(1, 0)
+iconCorner.Parent = icon
+
+local iconRing = Instance.new("UIStroke")
+iconRing.Color = Color3.fromRGB(176, 128, 30)
+iconRing.Thickness = 2
+iconRing.Parent = icon
+
+local coinLabel = Instance.new("TextLabel")
+coinLabel.Position = UDim2.new(0, 38, 0, 0)
+coinLabel.Size = UDim2.new(1, -46, 1, 0)
+coinLabel.BackgroundTransparency = 1
+coinLabel.Font = Enum.Font.GothamBold
+coinLabel.TextSize = 20
+coinLabel.TextXAlignment = Enum.TextXAlignment.Left
+coinLabel.TextColor3 = Color3.fromRGB(255, 226, 140)
+coinLabel.Text = "Monedas: 0"
+coinLabel.Parent = counter
+
+local flashId = 0
+local function flash(text)
+	flashId = flashId + 1
+	local id = flashId
+	big.Text = text
+	big.TextTransparency = 0
+	big.TextStrokeTransparency = 0.4
+	task.delay(1.8, function()
+		if id ~= flashId then
+			return
+		end
+		TweenService:Create(big, TweenInfo.new(1.6), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+	end)
+end
+
+local function refreshRoom()
+	local n = player:GetAttribute("Room")
+	if n == nil then
+		return
+	end
+	local name = player:GetAttribute("RoomName") or ""
+	small.Text = "Habitación " .. n .. "  ·  " .. name
+	if n == 0 or n == 50 or n == 100 then
+		flash(name)
+	end
+end
+
+local lastCoins = 0
+local function refreshCoins()
+	local c = player:GetAttribute("Coins") or 0
+	coinLabel.Text = "Monedas: " .. c
+	if c > lastCoins then
+		counter.Size = UDim2.fromOffset(164, 38)
+		TweenService:Create(counter, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Size = UDim2.fromOffset(150, 34) }):Play()
+	end
+	lastCoins = c
+end
+
+player:GetAttributeChangedSignal("Room"):Connect(refreshRoom)
+player:GetAttributeChangedSignal("Coins"):Connect(refreshCoins)
+refreshRoom()
+refreshCoins()
+
+-- monedas: giran y flotan (solo se anima en tu pantalla)
+local coins = {}
+local function track(inst)
+	if inst:IsA("BasePart") and not coins[inst] then
+		coins[inst] = { base = inst.Position, phase = math.random() * 6.28 }
+	end
+end
+for _, inst in ipairs(CollectionService:GetTagged("Moneda")) do
+	track(inst)
+end
+CollectionService:GetInstanceAddedSignal("Moneda"):Connect(track)
+CollectionService:GetInstanceRemovedSignal("Moneda"):Connect(function(inst)
+	coins[inst] = nil
+end)
+
+RunService.RenderStepped:Connect(function()
+	local t = os.clock()
+	for coin, info in pairs(coins) do
+		if coin.Parent then
+			local bob = math.sin(t * 2.2 + info.phase) * 0.12
+			coin.CFrame = CFrame.new(info.base + Vector3.new(0, bob, 0)) * CFrame.Angles(0, t * 2.5 + info.phase, 0)
+		else
+			coins[coin] = nil
+		end
+	end
+end)
+]]></ProtectedString>
+</Properties>
+</Item>
+</Item>
+</Item>
+</roblox>
